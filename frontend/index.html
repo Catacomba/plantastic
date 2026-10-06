@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Plantastic</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.js" } }
+  </script>
+</head>
+<body>
+  <canvas id="board"></canvas>
+
+  <header class="bar" id="clock-bar">
+    <button id="pause" type="button" disabled>Pause</button>
+    <label class="field">
+      <span>Grow for</span>
+      <input id="step-count" type="number" min="1" max="1000" step="1" value="10">
+    </label>
+    <button id="grow" type="button" disabled>Grow</button>
+    <span class="readout">Iteration <strong id="tick">0</strong></span>
+    <span class="readout">Cells <strong id="cell-count">0</strong></span>
+    <label class="field push">
+      <span>Hex size</span>
+      <input id="hex-size" type="range" min="6" max="80" step="1" value="28">
+    </label>
+  </header>
+
+  <footer class="bar" id="tool-bar">
+    <div class="tools" role="radiogroup" aria-label="Tool">
+      <button id="tool-seed" type="button" role="radio" aria-checked="true">Seed</button>
+      <button id="tool-scissors" type="button" role="radio" aria-checked="false">Scissors</button>
+    </div>
+    <label class="field">
+      <span>Species</span>
+      <select id="species"></select>
+    </label>
+    <label class="field">
+      <span>Speed</span>
+      <input id="speed" type="text" inputmode="decimal" size="6" value="1"
+             title="Hexagons per iteration. 0.25 or 1/4 means one hexagon every 4 iterations.">
+    </label>
+  </footer>
+
+  <div id="banner" hidden>Disconnected from the server. Reload the page to start a new board.</div>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

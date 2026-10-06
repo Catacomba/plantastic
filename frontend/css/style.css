@@ -1,0 +1,166 @@
+:root {
+  --bg: #101613;
+  --bar: rgba(22, 31, 26, 0.92);
+  --line: #2c3d34;
+  --text: #dfe9e2;
+  --muted: #8fa398;
+  --accent: #5fbf7a;
+  --danger: #d9654f;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.4 system-ui, "Segoe UI", sans-serif;
+}
+
+#board {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+#board.panning {
+  cursor: grabbing;
+}
+
+.bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 8px 16px;
+  background: var(--bar);
+  border: 0 solid var(--line);
+}
+
+#clock-bar {
+  top: 0;
+  border-bottom-width: 1px;
+}
+
+#tool-bar {
+  bottom: 0;
+  border-top-width: 1px;
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.push {
+  margin-left: auto;
+}
+
+.readout {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.readout strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: var(--text);
+  background: #1b2620;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 10px;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled,
+input:disabled,
+select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+input[type="number"] {
+  width: 76px;
+}
+
+input[type="range"] {
+  width: 160px;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.tools {
+  display: flex;
+  gap: 4px;
+}
+
+.tools button[aria-checked="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0c130f;
+  font-weight: 600;
+}
+
+#banner {
+  position: fixed;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  padding: 10px 16px;
+  background: var(--danger);
+  color: #fff;
+  border-radius: 8px;
+}
+
+#toast {
+  position: fixed;
+  bottom: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  padding: 8px 14px;
+  background: #26342c;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+}
+
+#toast.visible {
+  opacity: 1;
+}
