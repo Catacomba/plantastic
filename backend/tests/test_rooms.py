@@ -197,3 +197,56 @@ def test_clock_pauses_and_notifies_when_the_board_fills():
     assert sent[-1]["type"] == "notice" and sent[-1]["code"] == "board_full"
     assert sent[-2]["type"] == "update" and sent[-2]["clock"] == "paused"
     assert room.board.tick == 4
+
+
+def two_vine_room(running: bool) -> Room:
+    """A room with two vines grown 6 cells from roots far enough apart never to meet."""
+    room = paused_room()
+    room.handle(PLAYER, plant(0, 0))
+    room.handle(PLAYER, plant(0, 40))
+    room.handle(PLAYER, command(type="step", n=6))
+    if running:
+        room.handle(PLAYER, command(type="resume"))
+    return room
+
+
+def slice_across(room: Room) -> list:
+    """A path that crosses the third cell of every vine, with empty hexes in between."""
+    segments = [cell for cell in room.board.cells.values() if cell.kind == "segment"]
+    targets = []
+    for plant_id in (1, 2):
+        vine = [cell.hex for cell in segments if cell.plant_id == plant_id]
+        targets.append(list(vine[2]))
+    return [targets[0], [50, 50], [51, 50], targets[1]]
+
+
+@pytest.mark.parametrize("running", [True, False])
+def test_slice_applies_in_one_update_and_leaves_the_clock_alone(running):
+    room = two_vine_room(running)
+    path = slice_across(room)
+    (update,) = room.handle(PLAYER, command(type="slice", hexes=path))
+
+    assert update["type"] == "update"
+    assert update["tick"] == 6
+    assert update["clock"] == ("running" if running else "paused")
+    assert sorted((cell["q"], cell["r"]) for cell in update["changed"]) == sorted(
+        [tuple(path[0]), tuple(path[3])]
+    )
+    assert all(cell["kind"] == "stump" for cell in update["changed"])
+    assert len(update["removed"]) == 6
+    assert len(update["tips"]) == 4
+
+
+def test_slice_that_cuts_nothing_is_not_an_error():
+    room = two_vine_room(running=False)
+    before = room.board.cells_snapshot()
+    (update,) = room.handle(PLAYER, command(type="slice", hexes=[[50, 50], [0, 0], [51, 50]]))
+
+    assert update["type"] == "update"
+    assert update["added"] == update["changed"] == update["removed"] == []
+    assert room.board.cells_snapshot() == before
+
+
+def test_mode_can_forbid_slicing():
+    room = Room(LookOnlyMode(), PLAYER, seed=1)
+    assert rejected(room, command(type="slice", hexes=[[0, 0]])) == "not_permitted"

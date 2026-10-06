@@ -15,20 +15,21 @@ const GRID_SOLID_AT = 16;
 const VINE_WIDTH = 0.3;
 const STUMP_COLOR = new THREE.Color(0x8a6f52);
 const BLOCKED_TIP_COLOR = new THREE.Color(0x77807a);
+const STROKE_COLOR = new THREE.Color(0xd9654f);
 const WHITE = new THREE.Color(0xffffff);
 
-const ORDER = { grid: 0, hover: 1, links: 2, cells: 3, tips: 4 };
+const ORDER = { grid: 0, stroke: 1, hover: 2, links: 3, cells: 4, tips: 5 };
 
 const matrix = new THREE.Matrix4();
 const scale = new THREE.Vector3();
 
 // A pool of instances of one shape that grows as the board does.
 class Instances {
-  constructor(scene, geometry, renderOrder) {
+  constructor(scene, geometry, renderOrder, materialOptions = {}) {
     this.scene = scene;
     this.geometry = geometry;
     this.renderOrder = renderOrder;
-    this.material = new THREE.MeshBasicMaterial({ depthTest: false });
+    this.material = new THREE.MeshBasicMaterial({ depthTest: false, ...materialOptions });
     this.capacity = 0;
     this.mesh = null;
     this.count = 0;
@@ -100,6 +101,7 @@ export class Board {
     this.stumps = new Instances(this.scene, hexagon, ORDER.cells);
     this.tipStrips = new Instances(this.scene, strip, ORDER.tips);
     this.tipHeads = new Instances(this.scene, disc, ORDER.tips);
+    this.stroke = new Instances(this.scene, hexagon, ORDER.stroke, { transparent: true, opacity: 0.45 });
 
     this.plantColors = new Map();
     this.tips = [];
@@ -110,10 +112,12 @@ export class Board {
     window.addEventListener("resize", () => this.resize());
   }
 
-  start() {
+  // `onFrame` is called before each frame with the seconds since the last one.
+  start(onFrame) {
     const frame = (now) => {
       const dt = Math.min((now - this.lastFrame) / 1000, 0.1);
       this.lastFrame = now;
+      onFrame?.(dt);
       this.updateGrid();
       this.drawTips(dt);
       this.renderer.render(this.scene, this.camera);
@@ -276,6 +280,16 @@ export class Board {
     const [x, y] = hexToWorld(hex[0], hex[1]);
     this.hover.position.set(x, y, 0);
     this.hover.material.color.set(color);
+  }
+
+  // Marks the hexes of a stroke that has not been applied yet. An empty list clears it.
+  setStroke(hexes) {
+    this.stroke.begin(hexes.length);
+    for (const [q, r] of hexes) {
+      const [x, y] = hexToWorld(q, r);
+      this.stroke.put(x, y, 0, 0.94, 0.94, STROKE_COLOR);
+    }
+    this.stroke.end();
   }
 
   // -- plants -------------------------------------------------------------

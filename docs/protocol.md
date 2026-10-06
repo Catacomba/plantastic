@@ -12,11 +12,14 @@ Exact numbers (speeds and progress) are strings such as `"0.25"` or `"1/4"`.
 |---|---|---|
 | `plant` | `q`, `r`, `species`, `speed` | Plant a seed. `speed` is hexagons per iteration, above 0 and at most 10. |
 | `cut` | `q`, `r` | Cut the plant cell in that hex. |
+| `slice` | `hexes` | Cut along a path. `hexes` is a list of 1 to 512 `[q, r]` pairs in the order to cut. |
 | `pause` | | Stop the clock. |
 | `resume` | | Start the clock. |
 | `step` | `n` | Grow for `n` iterations (a whole number from 1 to 1000). Only while paused. |
 
 Unknown fields are rejected.
+
+`slice` cuts each hex that holds a living, non-root cell when its turn comes, and skips every other hex: empty hexes, stumps, and roots. It never returns `nothing_to_cut`, and a path that cuts nothing still gets an `update`. All cuts of one `slice` land on the same iteration. Removing a whole plant takes a `cut` on its root.
 
 ## Server to client
 

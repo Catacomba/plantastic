@@ -285,6 +285,20 @@ class World:
             self._add_tip(plant, sprout_cell, heading)
         return changes
 
+    def slice(self, hexes) -> Changes:
+        """Cut along a path, in order.
+
+        Each hex is judged when its turn comes, so a hex removed by an earlier
+        cut in the same path is simply skipped. Empty hexes and stumps are
+        skipped too, and roots are never cut: removing a plant takes a ``cut``.
+        """
+        changes = Changes()
+        for hex in hexes:
+            cell = self.cells.get(hex)
+            if cell is not None and cell.kind == SEGMENT:
+                changes.merge(self.cut(hex))
+        return changes
+
     # -- internals ---------------------------------------------------------
 
     def _add_tip(self, plant: Plant, cell: Hex, heading: int) -> Tip:

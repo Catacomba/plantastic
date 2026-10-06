@@ -95,6 +95,37 @@ def test_session_keeps_client_and_server_boards_identical():
         assert client.matches(room)
 
 
+def test_slices_while_paused_land_on_the_same_tick():
+    app = create_app(tick_interval=0.02, frontend_dir=None)
+    with TestClient(app).websocket_connect("/ws") as websocket:
+        client = ClientBoard(websocket)
+        room = only_room(app)
+
+        websocket.send_json({"type": "pause"})
+        while client.clock != "paused":
+            client.receive()
+        client.send(type="plant", q=0, r=0, species="straight-vine", speed="1")
+        client.send(type="plant", q=0, r=8, species="straight-vine", speed="1")
+        client.send(type="step", n=6)
+        tick = client.tick
+        vines = {
+            plant: [cell for cell in client.cells.values() if cell["plant"] == plant and cell["kind"] == "segment"]
+            for plant in (1, 2)
+        }
+
+        first = client.send(type="slice", hexes=[[vines[1][3]["q"], vines[1][3]["r"]], [40, 40]])
+        second = client.send(type="slice", hexes=[[41, 40], [vines[2][3]["q"], vines[2][3]["r"]]])
+        assert first["tick"] == second["tick"] == tick
+        assert [cell["kind"] for cell in first["changed"] + second["changed"]] == ["stump", "stump"]
+        assert client.errors == []
+        assert client.matches(room)
+
+        assert client.send(type="slice", hexes=[])["code"] == "bad_message"
+        assert client.send(type="resume")["clock"] == "running"
+        while client.tick < tick + 3:
+            client.receive()
+
+
 def test_running_room_pushes_growth():
     app = create_app(tick_interval=0.02, frontend_dir=None)
     with TestClient(app).websocket_connect("/ws") as websocket:

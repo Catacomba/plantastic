@@ -13,6 +13,7 @@ from .protocol import (
     PauseCommand,
     PlantCommand,
     ResumeCommand,
+    SliceCommand,
     StepCommand,
     notice_message,
 )
@@ -127,6 +128,8 @@ class Room:
                 return [self._update(changes)]
             if isinstance(command, CutCommand):
                 return [self._update(self.board.cut((command.q, command.r)))]
+            if isinstance(command, SliceCommand):
+                return [self._update(self.board.slice(command.hexes))]
         except SimError as error:
             raise GameError(error.code, error.message) from None
         if isinstance(command, PauseCommand):

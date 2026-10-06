@@ -7,6 +7,7 @@ from typing import Annotated, Literal, Union
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, TypeAdapter, ValidationError
 
 COORD_LIMIT = 2**31
+MAX_SLICE_HEXES = 512
 
 Coord = Annotated[StrictInt, Field(ge=-COORD_LIMIT, le=COORD_LIMIT)]
 
@@ -39,6 +40,12 @@ class CutCommand(_Command):
     r: Coord
 
 
+class SliceCommand(_Command):
+    type: Literal["slice"]
+    # The hexes of a stroke, in the order the cursor passed them.
+    hexes: list[tuple[Coord, Coord]] = Field(min_length=1, max_length=MAX_SLICE_HEXES)
+
+
 class PauseCommand(_Command):
     type: Literal["pause"]
 
@@ -54,7 +61,7 @@ class StepCommand(_Command):
 
 
 Command = Annotated[
-    Union[PlantCommand, CutCommand, PauseCommand, ResumeCommand, StepCommand],
+    Union[PlantCommand, CutCommand, SliceCommand, PauseCommand, ResumeCommand, StepCommand],
     Field(discriminator="type"),
 ]
 

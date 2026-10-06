@@ -14,7 +14,7 @@ export function setupUi({ net, onHexSize }) {
   const hexSize = $("hex-size");
   const species = $("species");
   const speed = $("speed");
-  const toolButtons = { seed: $("tool-seed"), scissors: $("tool-scissors") };
+  const toolButtons = { seed: $("tool-seed"), scissors: $("tool-scissors"), mower: $("tool-mower") };
   const toastBox = $("toast");
 
   let tool = "seed";
@@ -75,8 +75,9 @@ export function setupUi({ net, onHexSize }) {
   });
 
   hexSize.addEventListener("input", () => onHexSize(Number(hexSize.value)));
-  toolButtons.seed.addEventListener("click", () => selectTool("seed"));
-  toolButtons.scissors.addEventListener("click", () => selectTool("scissors"));
+  for (const [name, button] of Object.entries(toolButtons)) {
+    button.addEventListener("click", () => selectTool(name));
+  }
   species.addEventListener("change", defaultSpeed);
 
   return {

@@ -29,8 +29,12 @@
 
   <footer class="bar" id="tool-bar">
     <div class="tools" role="radiogroup" aria-label="Tool">
-      <button id="tool-seed" type="button" role="radio" aria-checked="true">Seed</button>
-      <button id="tool-scissors" type="button" role="radio" aria-checked="false">Scissors</button>
+      <button id="tool-seed" type="button" role="radio" aria-checked="true"
+              title="Click a hex to plant a seed.">Seed</button>
+      <button id="tool-scissors" type="button" role="radio" aria-checked="false"
+              title="Click or drag to cut while the game keeps running. Click a root to remove the plant.">Scissors</button>
+      <button id="tool-mower" type="button" role="radio" aria-checked="false"
+              title="Press to pause, drag to mark a path, release to cut it all at once. Escape cancels.">Mower</button>
     </div>
     <label class="field">
       <span>Species</span>

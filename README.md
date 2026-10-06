@@ -29,9 +29,12 @@ Server options:
 ## Play
 
 - **Seed**: click a hex to plant. The seed picks a random direction. Speed is in hexagons per iteration; `0.25` or `1/4` means one hexagon every 4 iterations.
-- **Scissors**: click a plant cell to cut it. The cell becomes a stump and everything beyond it is removed. Cutting a root removes the whole plant.
+- **Scissors**: click a plant cell to cut it, or drag to cut every cell the cursor passes while the game keeps running. A cut cell becomes a stump and everything beyond it is removed.
+- **Mower**: press to pause the game, drag to mark a path, and release to cut the whole path at once. The game resumes if it was running. Escape cancels the path.
+- A drag never cuts a root. To remove a whole plant, click its root with the scissors or the mower.
 - **Pause / Resume** stops and starts the clock. While paused, **Grow** advances the board by the number of iterations you enter.
-- **Drag** to pan. The **hex size** slider and the mouse wheel change how large the hexagons are drawn.
+- **Drag with the right or middle mouse button** to pan, or hold **W A S D** or the **arrow keys**. Hold **Shift** to pan faster.
+- The **hex size** slider and the mouse wheel change how large the hexagons are drawn.
 
 The straight vine grows in a straight line. When cut, it forks from two cells behind the stump, one fork to each side.
 

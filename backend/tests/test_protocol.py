@@ -50,3 +50,31 @@ def test_malformed_and_unknown_messages_fail_validation(raw):
     with pytest.raises(GameError) as error:
         parse_command(raw)
     assert error.value.code == "bad_message"
+
+
+def test_slice_parses_hex_pairs():
+    command = parse_command(json.dumps({"type": "slice", "hexes": [[0, 0], [1, -1]]}))
+    assert command.type == "slice"
+    assert command.hexes == [(0, 0), (1, -1)]
+    assert len(parse_command(json.dumps({"type": "slice", "hexes": [[0, 0]] * 512})).hexes) == 512
+
+
+@pytest.mark.parametrize(
+    "hexes",
+    [
+        [],
+        [[0, 0]] * 513,
+        [[0]],
+        [[0, 0, 0]],
+        [[0.5, 0]],
+        [["0", 0]],
+        [[2**40, 0]],
+        [{"q": 0, "r": 0}],
+        "0,0",
+        None,
+    ],
+)
+def test_invalid_slices_fail_validation(hexes):
+    with pytest.raises(GameError) as error:
+        parse_command(json.dumps({"type": "slice", "hexes": hexes}))
+    assert error.value.code == "bad_message"

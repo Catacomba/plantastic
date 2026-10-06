@@ -78,6 +78,7 @@ export function connect(handlers) {
     state,
     plant: (q, r, species, speed) => send({ type: "plant", q, r, species, speed }),
     cut: (q, r) => send({ type: "cut", q, r }),
+    slice: (hexes) => send({ type: "slice", hexes }),
     pause: () => send({ type: "pause" }),
     resume: () => send({ type: "resume" }),
     step: (n) => send({ type: "step", n }),
