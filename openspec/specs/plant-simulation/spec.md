@@ -18,7 +18,7 @@ The simulation SHALL model the board as a hexagonal grid with no edges, in which
 - **THEN** no other cell, of the same or another plant, can be placed in that hex
 
 ### Requirement: Planting a seed
-The simulation SHALL allow a seed of a chosen species and speed to be planted in an empty hex. Planting SHALL create a new plant consisting of a root cell in that hex and one growing tip at the root. The tip's starting direction SHALL be chosen at random from the six directions unless a direction is given. Each plant SHALL record the player who owns it.
+The simulation SHALL allow a seed of a chosen species and speed to be planted in an empty hex, together with settings when the species has them. Planting SHALL create a new plant consisting of a root cell in that hex and one growing tip at the root. The tip's starting direction SHALL be chosen at random from the six directions unless a direction is given. Each plant SHALL record the player who owns it. A plant's species, speed, and settings SHALL be fixed when it is planted and SHALL never change afterwards.
 
 #### Scenario: Seed in an empty hex
 - **WHEN** a seed is planted in an empty hex without a direction
@@ -27,6 +27,18 @@ The simulation SHALL allow a seed of a chosen species and speed to be planted in
 #### Scenario: Seed in an occupied hex
 - **WHEN** a seed is planted in a hex that is already occupied
 - **THEN** the planting is rejected and the board is unchanged
+
+#### Scenario: Seed with settings
+- **WHEN** a seed of a species that has settings is planted with valid settings
+- **THEN** the new plant holds exactly those settings
+
+#### Scenario: Settings for a species without any
+- **WHEN** a seed of a species that has no settings is planted with settings
+- **THEN** the planting is rejected and the board is unchanged
+
+#### Scenario: Later seeds do not affect earlier plants
+- **WHEN** two seeds of the same species are planted with different settings, one after the other
+- **THEN** each plant grows by its own settings for as long as it exists
 
 ### Requirement: Growth by speed
 Each plant SHALL have a speed, a positive number of hexagons per iteration that may be fractional or greater than one. Each iteration, every tip SHALL accumulate progress equal to its plant's speed and SHALL advance one hex for each whole unit of progress, carrying any remainder forward. Speeds SHALL be applied exactly, with no rounding drift.
@@ -57,6 +69,40 @@ A tip whose next hex is occupied SHALL NOT advance and SHALL NOT turn. It SHALL 
 #### Scenario: Obstacle is removed
 - **WHEN** the cell blocking a tip is removed by a cut
 - **THEN** the tip advances into the freed hex on the next iteration and continues at its normal speed, without a burst of catch-up growth
+
+### Requirement: Tips turn, branch, and end
+On each step a tip's species SHALL decide whether the tip continues in a new or unchanged direction, sprouts further tips, or ends. A tip created by branching SHALL sit on the cell it branched from, SHALL start with no progress, and SHALL be created only if the hex it would grow into is empty and its plant has no tip on that cell with that direction. A tip that ends SHALL be removed, and the cells it grew SHALL remain.
+
+#### Scenario: Turn
+- **WHEN** a species turns a tip on a step
+- **THEN** the tip's next cell is in the new direction, joined to the cell it left
+
+#### Scenario: Branch
+- **WHEN** a species branches a tip that continues straight and sprouts one tip to the side
+- **THEN** the original tip advances, and a second tip sits on the cell it left, heading to the side with no progress
+
+#### Scenario: Branch without room
+- **WHEN** a species sprouts a tip toward a hex that is occupied at that moment
+- **THEN** that tip is not created and the rest of the step is unaffected
+
+#### Scenario: End
+- **WHEN** a species ends a tip
+- **THEN** the tip no longer exists, its cells remain on the board, and the plant's other tips keep growing
+
+### Requirement: One growth decision per hex
+A tip SHALL make its growth decision once for each hex it enters. A tip that cannot advance, because its next hex is occupied or because the board is full, SHALL keep the decision it made and SHALL NOT decide again, draw further random numbers, or sprout further tips until it has advanced.
+
+#### Scenario: Blocked after deciding to turn
+- **WHEN** a tip decides to turn and finds the hex in its new direction occupied
+- **THEN** it waits heading in that direction, and advances that way once the hex is empty
+
+#### Scenario: Board full
+- **WHEN** a tip of a species that branches at random cannot advance for 20 iterations because the board is full
+- **THEN** it has sprouted nothing and changed nothing during those iterations, and when room is made it advances as it had decided before the wait
+
+#### Scenario: Waiting does not disturb replay
+- **WHEN** two boards with the same random seed receive the same actions, including a period in which tips are blocked
+- **THEN** the boards are identical after every iteration
 
 ### Requirement: Deterministic collisions
 When more than one tip is due to enter the same empty hex in the same iteration, exactly one SHALL enter it and the others SHALL be blocked. The tip of the plant planted earliest SHALL win; between tips of the same plant, the tip created earliest SHALL win.
@@ -146,3 +192,30 @@ A board SHALL have a maximum number of occupied hexes. Growth and planting SHALL
 #### Scenario: Space freed by cutting
 - **WHEN** a full board has cells removed by a cut
 - **THEN** growth can continue on later iterations
+
+### Requirement: Iterations report their work
+Each iteration SHALL report the number of tip visits it made, where a tip visit is one attempt to move a tip that was due to advance, whether or not the tip then moved. The count SHALL depend only on the state of the board, so that two boards in the same state report the same count, and counting SHALL NOT change the outcome of the iteration.
+
+#### Scenario: One growing tip
+- **WHEN** a board with a single unobstructed tip of speed 1 advances one iteration
+- **THEN** the iteration reports 1 tip visit
+
+#### Scenario: Fast tip
+- **WHEN** a board with a single unobstructed tip of speed 2 advances one iteration
+- **THEN** the iteration reports 2 tip visits, one for each hex entered
+
+#### Scenario: Slow tip that is not due
+- **WHEN** a board with a single tip of speed 0.25 advances one iteration in which the tip does not move
+- **THEN** the iteration reports 0 tip visits
+
+#### Scenario: Waiting tip still counts
+- **WHEN** a board whose only tip is blocked advances one iteration
+- **THEN** the iteration reports 1 tip visit, although nothing moved
+
+#### Scenario: Same board, same count
+- **WHEN** two boards with the same random seed receive the same actions
+- **THEN** they report the same number of tip visits for every iteration
+
+#### Scenario: Several iterations together
+- **WHEN** several iterations are advanced as one batch
+- **THEN** the reported tip visits are the sum of the visits of each iteration

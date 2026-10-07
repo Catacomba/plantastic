@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, TypeAdapter, ValidationError
 
@@ -32,6 +32,8 @@ class PlantCommand(_Command):
     species: str = Field(max_length=64)
     # Sent as a string ("0.25" or "1/4") so the value stays exact.
     speed: Union[Annotated[str, Field(max_length=32)], StrictInt, StrictFloat]
+    # Only for species that have settings. The species checks the contents.
+    settings: Union[dict[str, Any], None] = None
 
 
 class CutCommand(_Command):

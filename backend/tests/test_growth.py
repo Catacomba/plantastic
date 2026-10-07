@@ -147,3 +147,56 @@ def test_different_seeds_give_different_seed_directions():
 
     assert directions(11) == directions(11)
     assert directions(11) != directions(12)
+
+
+# -- tip visits ---------------------------------------------------------------
+
+
+def visits_per_iteration(speed: str, iterations: int) -> list[int]:
+    world = World(seed=1)
+    world.plant_seed((0, 0), VINE, speed, "p1", direction=EAST)
+    return [world.step().visits for _ in range(iterations)]
+
+
+def test_one_unobstructed_tip_is_one_visit_per_iteration():
+    assert visits_per_iteration("1", 4) == [1, 1, 1, 1]
+
+
+def test_fast_tip_is_visited_once_for_each_hex_entered():
+    assert visits_per_iteration("2", 3) == [2, 2, 2]
+
+
+def test_tip_that_is_not_due_is_not_visited():
+    assert visits_per_iteration("0.25", 8) == [0, 0, 0, 1, 0, 0, 0, 1]
+
+
+def test_waiting_tip_is_visited_every_iteration():
+    world, _ = blocked_vine()
+    steps(world, 5)
+    cells = len(world.cells)
+    # Only the blocked vine is due; the slow obstacle is not.
+    assert [world.step().visits for _ in range(4)] == [1, 1, 1, 1]
+    assert len(world.cells) == cells
+
+
+def test_merged_changes_sum_their_visits():
+    from plantastic.sim.world import Changes
+
+    world = World(seed=1)
+    world.plant_seed((0, 0), VINE, "2", "p1", direction=EAST)
+    world.plant_seed((0, 9), VINE, "1", "p1", direction=EAST)
+    merged = Changes()
+    for _ in range(5):
+        merged.merge(world.step())
+    assert merged.visits == 15
+
+
+def test_same_seed_worlds_report_the_same_visits():
+    def visits(seed):
+        world = World(seed=seed)
+        for index in range(4):
+            world.plant_seed((index * 30, 0), ["burst", "wanderer", "fern", "zigzag"][index], "1", "p1")
+        return [world.step().visits for _ in range(30)]
+
+    assert visits(4) == visits(4)
+    assert sum(visits(4)) > 60

@@ -18,7 +18,7 @@ The server SHALL host games in rooms. Each room SHALL own its board, its clock, 
 - **THEN** commands and growth in one room have no effect on the other
 
 ### Requirement: Joining a sandbox room
-When a client connects, the server SHALL create a new sandbox room with that client as its only player and SHALL send the client the room's mode, the species catalog, the clock state, and a complete snapshot of the board. The room SHALL be discarded when its player disconnects.
+When a client connects, the server SHALL create a new sandbox room with that client as its only player and SHALL send the client the room's mode, the species catalog with each species' settings description, the clock state, and a complete snapshot of the board including the details of every plant on it. The room SHALL be discarded when its player disconnects.
 
 #### Scenario: First connection
 - **WHEN** a client connects
@@ -27,6 +27,10 @@ When a client connects, the server SHALL create a new sandbox room with that cli
 #### Scenario: Disconnect
 - **WHEN** the player of a sandbox room disconnects
 - **THEN** the room and its board no longer exist on the server
+
+#### Scenario: Catalog describes settings
+- **WHEN** a client connects
+- **THEN** the catalog in the welcome lists eight species, and the custom species carries a description of each of its settings
 
 ### Requirement: Room mode decides permitted commands
 Every room SHALL have a mode, and the mode SHALL decide which commands its players may use. The sandbox mode SHALL permit planting seeds of any species at any valid speed, cutting any plant regardless of owner, slicing along a path through any plants regardless of owner, pausing, resuming, and stepping. A command the mode does not permit SHALL be rejected with an error.
@@ -42,6 +46,32 @@ Every room SHALL have a mode, and the mode SHALL decide which commands its playe
 #### Scenario: Mode that forbids slicing
 - **WHEN** a player slices in a room whose mode does not permit slicing
 - **THEN** the command is rejected with an error and the board is unchanged
+
+### Requirement: Planting with settings
+The plant command SHALL accept settings for the seed. The room SHALL pass them to the board with the species and speed, and SHALL reject the command with an error that identifies the problem when the settings are missing for a species that needs them, given for a species that has none, out of range, or inconsistent. A rejected command SHALL leave the board unchanged.
+
+#### Scenario: Custom seed
+- **WHEN** a player plants a custom seed with valid settings
+- **THEN** the plant is created and clients are told its settings
+
+#### Scenario: Invalid settings
+- **WHEN** a player plants a custom seed with a branch chance of 150
+- **THEN** the player receives an error saying the settings are invalid, and no plant is created
+
+#### Scenario: Seed without settings still works
+- **WHEN** a player plants a straight vine with no settings
+- **THEN** the plant is created as before
+
+### Requirement: Plant details are synchronized
+The server SHALL tell every client in a room the identifier, species, speed, and settings of each plant on the board: all of them when the client joins, and each new plant in the update that reports its planting.
+
+#### Scenario: New plant
+- **WHEN** a seed is planted
+- **THEN** the update that adds its root also carries the plant's identifier, species, speed, and settings
+
+#### Scenario: Details match the server
+- **WHEN** a client has applied the welcome and every update since
+- **THEN** it knows the species, speed, and settings of every plant that has a cell on its board
 
 ### Requirement: Slice command
 A player SHALL be able to send an ordered list of hexes to be cut along a path, between 1 and a maximum number of hexes, in a single command. The room SHALL apply the path to its board immediately, in both clock states, and SHALL send its clients one update containing every resulting change. A path that cuts nothing SHALL NOT produce an error.
@@ -110,6 +140,29 @@ The server SHALL keep every client in a room up to date. After each iteration an
 #### Scenario: Client matches server
 - **WHEN** a client has applied the welcome snapshot and every update sent since
 - **THEN** its board is identical to the server's board
+
+### Requirement: Updates report iteration cost
+Every update that advances the board, whether from the clock or from growing for N iterations, SHALL carry the number of iterations advanced, the time the server spent computing them in milliseconds, and the number of tip visits they made. An update that advances nothing SHALL carry no iteration cost. The welcome SHALL carry the time available per iteration while the clock runs. Measuring SHALL NOT affect the game: the board after any sequence of commands SHALL be the same as it would be without it.
+
+#### Scenario: Clock tick
+- **WHEN** a running room advances one iteration
+- **THEN** the update reports 1 iteration, a compute time of zero or more milliseconds, and that iteration's tip visits
+
+#### Scenario: Grow for N
+- **WHEN** a player in a paused room grows for 25 iterations
+- **THEN** the update reports 25 iterations, the total compute time for all of them, and the sum of their tip visits
+
+#### Scenario: Update without growth
+- **WHEN** a player plants a seed, cuts, slices, pauses, or resumes
+- **THEN** the update carries no iteration cost
+
+#### Scenario: Time available per iteration
+- **WHEN** a client connects to a server running at two iterations per second
+- **THEN** the welcome reports 500 milliseconds available per iteration
+
+#### Scenario: Measuring does not change the game
+- **WHEN** two rooms with the same random seed receive the same commands
+- **THEN** their boards are identical after every command, whatever compute times were measured
 
 ### Requirement: Full board pauses the room
 When a room's board reaches its maximum size, the room SHALL pause its clock and SHALL tell its clients that the board is full.

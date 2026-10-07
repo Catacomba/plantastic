@@ -15,6 +15,20 @@ from .rooms import DEFAULT_TICK_INTERVAL, Room, SandboxMode
 FRONTEND_DIR = Path(__file__).resolve().parents[3] / "frontend"
 
 
+class FreshStaticFiles(StaticFiles):
+    """Static files the browser must check before reusing.
+
+    Without this a browser may keep serving an old copy of a script after the
+    file has changed, and the page ends up with a mix of old and new code.
+    Unchanged files still cost only a short "not modified" reply.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 def create_app(
     tick_interval: float = DEFAULT_TICK_INTERVAL,
     max_cells: int = DEFAULT_MAX_CELLS,
@@ -55,6 +69,6 @@ def create_app(
             del app.state.rooms[room.id]
 
     if frontend_dir is not None:
-        app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+        app.mount("/", FreshStaticFiles(directory=frontend_dir, html=True), name="frontend")
 
     return app

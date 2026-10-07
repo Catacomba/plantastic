@@ -7,6 +7,7 @@ from plantastic.server.protocol import GameError, parse_command
 from plantastic.server.rooms import MAX_STEP, Mode, Room, SandboxMode
 
 PLAYER = "player-1"
+SPECIES_IDS = ["straight-vine", "zigzag", "spiral", "fern", "wanderer", "hydra", "burst", "custom"]
 
 
 def command(**fields):
@@ -48,9 +49,14 @@ def test_welcome_describes_the_room():
     assert welcome["seed"] == 42
     assert welcome["clock"] == "running"
     assert welcome["cells"] == [] and welcome["tips"] == []
-    assert welcome["species"] == [
-        {"id": "straight-vine", "name": "Straight vine", "default_speed": "1"}
-    ]
+    assert welcome["plants"] == []
+    assert [species["id"] for species in welcome["species"]] == SPECIES_IDS
+    assert welcome["species"][0] == {
+        "id": "straight-vine",
+        "name": "Straight vine",
+        "default_speed": "1",
+        "settings": [],
+    }
 
 
 def test_mode_rejects_commands_it_does_not_permit():
@@ -66,6 +72,7 @@ def test_plant_records_the_owner_and_returns_an_update():
 
     assert update["type"] == "update"
     assert update["added"] == [{"q": 2, "r": 3, "plant": 1, "kind": "root", "parent": None}]
+    assert update["plants"] == [{"id": 1, "species": "straight-vine", "speed": "1", "settings": None}]
     assert len(update["tips"]) == 1
     assert room.board.plants[1].owner == PLAYER
 
@@ -250,3 +257,140 @@ def test_slice_that_cuts_nothing_is_not_an_error():
 def test_mode_can_forbid_slicing():
     room = Room(LookOnlyMode(), PLAYER, seed=1)
     assert rejected(room, command(type="slice", hexes=[[0, 0]])) == "not_permitted"
+
+
+CUSTOM_SETTINGS = {
+    "branch_chance": 40,
+    "branch_min": 1,
+    "branch_max": 2,
+    "calm_min": 1,
+    "calm_max": 8,
+    "turn_chance": 15,
+    "cut_response": "regrow",
+}
+
+
+def plant_custom(q, r, **changes):
+    return command(type="plant", q=q, r=r, species="custom", speed="1", settings={**CUSTOM_SETTINGS, **changes})
+
+
+def test_welcome_describes_the_custom_species_settings():
+    room = Room(SandboxMode(), PLAYER, seed=1)
+    custom = room.welcome()["species"][-1]
+
+    assert custom["id"] == "custom"
+    assert [setting["id"] for setting in custom["settings"]] == list(CUSTOM_SETTINGS)
+    for setting in custom["settings"]:
+        assert {"id", "label", "kind", "default"} <= set(setting)
+        assert ("choices" in setting) == (setting["kind"] == "choice")
+        assert ("min" in setting and "max" in setting) == (setting["kind"] != "choice")
+    assert all(species["settings"] == [] for species in room.welcome()["species"][:-1])
+
+
+def test_custom_seed_is_planted_with_its_settings():
+    room = paused_room()
+    (update,) = room.handle(PLAYER, plant_custom(0, 0))
+
+    assert update["plants"] == [{"id": 1, "species": "custom", "speed": "1", "settings": CUSTOM_SETTINGS}]
+    assert room.board.plants[1].settings == CUSTOM_SETTINGS
+    assert room.welcome()["plants"] == update["plants"]
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        plant_custom(5, 5, branch_chance=150),
+        plant_custom(5, 5, branch_min=3, branch_max=1),
+        command(type="plant", q=5, r=5, species="custom", speed="1"),
+        command(type="plant", q=5, r=5, species="straight-vine", speed="1", settings=CUSTOM_SETTINGS),
+    ],
+)
+def test_invalid_settings_are_rejected_with_bad_settings(cmd):
+    room = paused_room()
+    room.handle(PLAYER, plant(0, 0))
+    assert rejected(room, cmd) == "bad_settings"
+    assert len(room.board.plants) == 1
+
+
+def test_bad_settings_message_names_the_problem():
+    room = paused_room()
+    with pytest.raises(GameError) as error:
+        room.handle(PLAYER, plant_custom(0, 0, branch_chance=150))
+    assert error.value.message == "Branch chance % must be from 0 to 100."
+
+
+def test_updates_carry_only_newly_created_plants():
+    room = paused_room()
+    room.handle(PLAYER, plant(0, 0))
+    (grow,) = room.handle(PLAYER, command(type="step", n=3))
+    assert grow["plants"] == []
+    (second,) = room.handle(PLAYER, plant_custom(0, 20))
+    assert [details["id"] for details in second["plants"]] == [2]
+
+
+def test_welcome_reports_the_time_available_per_iteration():
+    assert Room(SandboxMode(), PLAYER, seed=1).welcome()["tick_ms"] == 500
+    assert Room(SandboxMode(), PLAYER, seed=1, tick_interval=0.02).welcome()["tick_ms"] == 20
+
+
+def test_clock_tick_reports_one_iteration_of_cost():
+    room = paused_room()
+    room.handle(PLAYER, plant(0, 0))
+    (update,) = room.tick()
+
+    assert update["stats"]["iterations"] == 1
+    assert update["stats"]["visits"] == 1
+    assert isinstance(update["stats"]["step_ms"], float) and update["stats"]["step_ms"] >= 0
+
+
+def test_grow_reports_the_whole_batch():
+    room = paused_room()
+    room.handle(PLAYER, plant(0, 0, speed="2"))
+    (update,) = room.handle(PLAYER, command(type="step", n=25))
+
+    assert update["stats"]["iterations"] == 25
+    assert update["stats"]["visits"] == 50
+    assert update["stats"]["step_ms"] >= 0
+
+
+def test_grow_cut_short_by_a_full_board_reports_the_iterations_it_ran():
+    room = paused_room(max_cells=4)
+    room.handle(PLAYER, plant(0, 0))
+    update, _notice = room.handle(PLAYER, command(type="step", n=50))
+    assert update["stats"]["iterations"] == 4
+
+
+def test_updates_that_advance_nothing_carry_no_cost():
+    room = paused_room()
+    (planted,) = room.handle(PLAYER, plant(0, 0))
+    room.handle(PLAYER, command(type="step", n=4))
+    tip = room.board.tips_snapshot()[0]
+    updates = [
+        planted,
+        *room.handle(PLAYER, command(type="slice", hexes=[[50, 50]])),
+        *room.handle(PLAYER, command(type="cut", q=tip["q"], r=tip["r"])),
+        *room.handle(PLAYER, command(type="resume")),
+        *room.handle(PLAYER, command(type="pause")),
+    ]
+    assert len(updates) == 5
+    assert all(update["stats"] is None for update in updates)
+
+
+def test_measuring_does_not_change_the_game():
+    def play() -> list:
+        room = Room(SandboxMode(), PLAYER, seed=77)
+        room.handle(PLAYER, command(type="pause"))
+        history = []
+        script = [
+            command(type="plant", q=0, r=0, species="burst", speed="1"),
+            command(type="plant", q=30, r=0, species="wanderer", speed="2"),
+            command(type="step", n=12),
+            command(type="slice", hexes=[[q, 0] for q in range(1, 8)]),
+            command(type="step", n=9),
+        ]
+        for cmd in script:
+            room.handle(PLAYER, cmd)
+            history.append((room.board.tick, room.board.cells_snapshot(), room.board.tips_snapshot()))
+        return history
+
+    assert play() == play()

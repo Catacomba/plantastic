@@ -1,6 +1,7 @@
 import { Board, MAX_HEX_SIZE, MIN_HEX_SIZE } from "./board.js";
 import * as hex from "./hex.js";
 import { panOffset, trackHeldKeys } from "./keys.js";
+import { createMetrics } from "./metrics.js";
 import { connect } from "./net.js";
 import { setupUi } from "./ui.js";
 
@@ -32,11 +33,30 @@ if (problems.length) console.error("Plantastic: hex self-check failed", problems
 
 const canvas = document.getElementById("board");
 const board = new Board(canvas, loadHexSize());
+const metrics = createMetrics();
 
-function redraw(state) {
+// `meta` is how the update arrived, present only while the metrics are on.
+function redraw(state, meta) {
   board.setCells(state.cells);
   board.setTips(state.tips);
   ui.sync();
+  showHover(); // what is under a resting cursor may have changed
+  if (meta) {
+    metrics.update({
+      bytes: meta.bytes,
+      handleMs: performance.now() - meta.arrived,
+      stats: state.stats,
+      tickMs: state.tickMs,
+    });
+  }
+}
+
+// What the metrics panel counts on the board. Only asked for while it is shown.
+function boardCounts() {
+  const { tips, cells, plants } = net.state;
+  let waiting = 0;
+  for (const tip of tips) if (tip.blocked) waiting += 1;
+  return { tips: tips.length, waiting, cells: cells.size, plants: plants.size };
 }
 
 const net = connect({
@@ -62,7 +82,16 @@ function setHexSize(size, anchorX, anchorY) {
   saveHexSize(applied);
 }
 
-const ui = setupUi({ net, onHexSize: (size) => setHexSize(size) });
+const ui = setupUi({
+  net,
+  metrics,
+  boardCounts,
+  onHexSize: (size) => setHexSize(size),
+  onMetrics(on) {
+    metrics.enabled = on;
+    net.measuring = on;
+  },
+});
 ui.showHexSize(board.hexSize);
 ui.sync();
 
@@ -81,9 +110,13 @@ let stroke = null; // the cutting stroke in progress, if any
 function showHover() {
   if (!pointer || !net.state.connected) {
     board.setHover(null);
+    ui.showPlant(null);
     return;
   }
-  board.setHover(board.hexAt(pointer.x, pointer.y), HOVER_COLORS[ui.tool]);
+  const under = board.hexAt(pointer.x, pointer.y);
+  board.setHover(under, HOVER_COLORS[ui.tool]);
+  const cell = net.state.cells.get(hex.hexKey(...under));
+  ui.showPlant(cell ? net.state.plants.get(cell.plant) : null);
 }
 
 function sendSlice(hexes) {
@@ -97,7 +130,7 @@ function beginTool() {
   const start = board.hexAt(pointer.x, pointer.y);
   if (ui.tool === "seed") {
     if (ui.speed === "") ui.toast("Enter a speed for the seed.");
-    else net.plant(start[0], start[1], ui.species, ui.speed);
+    else net.plant(start[0], start[1], ui.species, ui.speed, ui.settings);
     return;
   }
   stroke = {
@@ -232,7 +265,8 @@ canvas.addEventListener(
 
 const heldKeys = trackHeldKeys();
 
-board.start((seconds) => {
+board.start((seconds, now) => {
+  metrics.frame(now);
   const [dx, dy] = panOffset(heldKeys, seconds);
   if (dx === 0 && dy === 0) return;
   // panBy moves the board's contents, so the view goes the opposite way.
@@ -243,4 +277,4 @@ board.start((seconds) => {
 });
 
 // For poking at the game from the browser console.
-window.plantastic = { board, net, hex, heldKeys };
+window.plantastic = { board, net, hex, heldKeys, metrics };

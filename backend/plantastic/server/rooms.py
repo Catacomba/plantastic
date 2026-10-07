@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import time
 from collections.abc import Awaitable, Callable
 
 from ..sim.world import DEFAULT_MAX_CELLS, Changes, SimError, World
@@ -80,16 +81,24 @@ class Room:
             "mode": self.mode.name,
             "seed": self.seed,
             "species": [
-                {"id": species.id, "name": species.name, "default_speed": str(species.default_speed)}
+                {
+                    "id": species.id,
+                    "name": species.name,
+                    "default_speed": str(species.default_speed),
+                    "settings": [setting.describe() for setting in species.settings],
+                }
                 for species in board.catalog.values()
             ],
             "clock": self.clock,
             "tick": board.tick,
+            # Time available for one iteration while the clock runs.
+            "tick_ms": round(self.tick_interval * 1000),
             "cells": board.cells_snapshot(),
             "tips": board.tips_snapshot(),
+            "plants": board.plants_snapshot(),
         }
 
-    def _update(self, changes: Changes) -> dict:
+    def _update(self, changes: Changes, stats: dict | None = None) -> dict:
         board = self.board
         return {
             "type": "update",
@@ -97,17 +106,36 @@ class Room:
             "added": changes.added,
             "removed": changes.removed,
             "changed": changes.changed,
+            "plants": changes.plants,
             "tips": board.tips_snapshot(),
             "clock": self.clock,
+            # The cost of the iterations this update advanced, or None if it advanced none.
+            "stats": stats,
         }
 
-    def _after_growth(self, changes: Changes) -> list[dict]:
-        """The messages for a growth result, pausing the room if the board filled up."""
+    def _grow(self, iterations: int) -> list[dict]:
+        """Advance the board, timing the work, and return the messages to send.
+
+        The clock is read only here, around the simulation, and never by it,
+        so measuring cannot change the game.
+        """
+        changes = Changes()
+        done = 0
+        started = time.perf_counter()
+        for _ in range(iterations):
+            changes.merge(self.board.step())
+            done += 1
+            if changes.full:
+                break
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        stats = {"iterations": done, "step_ms": round(elapsed_ms, 2), "visits": changes.visits}
+
         if not changes.full:
-            return [self._update(changes)]
+            return [self._update(changes, stats)]
+        # The board filled up: pause the room and say why.
         self._set_running(False)
         return [
-            self._update(changes),
+            self._update(changes, stats),
             notice_message("board_full", "The board is full. Cut something to make room."),
         ]
 
@@ -123,7 +151,11 @@ class Room:
         try:
             if isinstance(command, PlantCommand):
                 changes = self.board.plant_seed(
-                    (command.q, command.r), command.species, command.speed, player
+                    (command.q, command.r),
+                    command.species,
+                    command.speed,
+                    player,
+                    settings=command.settings,
                 )
                 return [self._update(changes)]
             if isinstance(command, CutCommand):
@@ -147,16 +179,11 @@ class Room:
             raise GameError("not_paused", "Pause the game before growing by a set number of iterations.")
         if not isinstance(count, int) or not 1 <= count <= MAX_STEP:
             raise GameError("bad_step", f"Iterations must be a whole number from 1 to {MAX_STEP}.")
-        changes = Changes()
-        for _ in range(count):
-            changes.merge(self.board.step())
-            if changes.full:
-                break
-        return self._after_growth(changes)
+        return self._grow(count)
 
     def tick(self) -> list[dict]:
         """Advance one iteration on the clock."""
-        return self._after_growth(self.board.step())
+        return self._grow(1)
 
     # -- clock -------------------------------------------------------------
 

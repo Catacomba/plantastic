@@ -21,11 +21,57 @@
     <button id="grow" type="button" disabled>Grow</button>
     <span class="readout">Iteration <strong id="tick">0</strong></span>
     <span class="readout">Cells <strong id="cell-count">0</strong></span>
-    <label class="field push">
-      <span>Hex size</span>
-      <input id="hex-size" type="range" min="6" max="80" step="1" value="28">
-    </label>
+    <span class="readout" id="plant-info"></span>
   </header>
+
+  <aside id="side" aria-label="Settings and performance">
+    <section id="menu" class="box">
+      <button id="menu-toggle" type="button" aria-expanded="false" aria-controls="menu-body">
+        <span>Settings</span>
+        <span id="menu-mark" aria-hidden="true">+</span>
+      </button>
+      <div id="menu-body" hidden>
+        <label class="check">
+          <input id="metrics-toggle" type="checkbox">
+          <span>Performance metrics</span>
+        </label>
+        <label class="field">
+          <span>Hex size</span>
+          <input id="hex-size" type="range" min="6" max="80" step="1" value="28">
+        </label>
+      </div>
+    </section>
+
+    <dl id="metrics" class="box" hidden>
+      <div title="Frames drawn per second. Capped by your display, and it stops while the tab is in the background.">
+        <dt>FPS</dt><dd id="m-fps"></dd>
+      </div>
+      <div title="Server compute time for the latest iteration, and its share of the time available per iteration.">
+        <dt>Iteration</dt><dd id="m-iteration"></dd>
+      </div>
+      <div title="Average compute time per iteration over the last 10 growth updates.">
+        <dt>Last 10</dt><dd id="m-recent"></dd>
+      </div>
+      <div title="Attempts to move a tip that was due in the latest iteration, whether or not it moved. Waiting tips count every iteration.">
+        <dt>Tip visits</dt><dd id="m-visits"></dd>
+      </div>
+      <div title="Growing tips, and how many of them are waiting behind an occupied hex. Tips drive the server's cost.">
+        <dt>Tips</dt><dd id="m-tips"></dd>
+      </div>
+      <div title="Occupied hexes. Cells drive the cost of redrawing the board.">
+        <dt>Cells</dt><dd id="m-cells"></dd>
+      </div>
+      <div>
+        <dt>Plants</dt><dd id="m-plants"></dd>
+      </div>
+      <div title="Size of the latest update from the server, and the time this browser took to read it and rebuild the board. Drawing itself shows in the FPS.">
+        <dt>Update</dt><dd id="m-update"></dd>
+      </div>
+      <div id="m-grow-row" hidden title="The last Grow: iterations, total server compute time, and the average per iteration.">
+        <dt>Last grow</dt><dd id="m-grow"></dd>
+      </div>
+    </dl>
+  </aside>
 
   <footer class="bar" id="tool-bar">
     <div class="tools" role="radiogroup" aria-label="Tool">
@@ -45,6 +91,8 @@
       <input id="speed" type="text" inputmode="decimal" size="6" value="1"
              title="Hexagons per iteration. 0.25 or 1/4 means one hexagon every 4 iterations.">
     </label>
+    <div id="settings" class="settings" hidden
+         title="These apply to seeds you plant from now on. A plant keeps the settings it was planted with."></div>
   </footer>
 
   <div id="banner" hidden>Disconnected from the server. Reload the page to start a new board.</div>

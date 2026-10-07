@@ -9,6 +9,7 @@ class ClientBoard:
     def __init__(self, websocket):
         self.websocket = websocket
         self.cells = {}
+        self.plants = {}
         self.tips = []
         self.tick = 0
         self.clock = None
@@ -32,6 +33,11 @@ class ClientBoard:
         elif message["type"] == "notice":
             self.notices.append(message["code"])
         if message["type"] in ("welcome", "update"):
+            for details in message["plants"]:
+                self.plants[details["id"]] = details
+            # A plant with no cells left is gone.
+            alive = {cell["plant"] for cell in self.cells.values()}
+            self.plants = {id: details for id, details in self.plants.items() if id in alive}
             self.tips = message["tips"]
             self.tick = message["tick"]
             self.clock = message["clock"]
@@ -67,13 +73,17 @@ def test_session_keeps_client_and_server_boards_identical():
         assert client.welcome["mode"] == "sandbox"
         assert client.welcome["clock"] == "running"
         assert client.welcome["cells"] == []
-        assert [species["id"] for species in client.welcome["species"]] == ["straight-vine"]
+        assert len(client.welcome["species"]) == 8
+        assert client.welcome["species"][0]["id"] == "straight-vine"
 
         assert client.send(type="pause")["clock"] == "paused"
         client.send(type="plant", q=0, r=0, species="straight-vine", speed="1")
-        client.send(type="plant", q=0, r=8, species="straight-vine", speed="0.25")
+        client.send(type="plant", q=0, r=60, species="straight-vine", speed="0.25")  # far enough never to meet the first
         growth = client.send(type="step", n=6)
         assert growth["tick"] == 6
+        assert growth["stats"]["iterations"] == 6 and growth["stats"]["step_ms"] >= 0
+        assert growth["stats"]["visits"] == 7  # six hexes at speed 1, one at speed 0.25
+        assert client.welcome["tick_ms"] == 3600 * 1000
         assert len(growth["added"]) == 7  # six cells at speed 1, one at speed 0.25
         assert client.matches(room)
 
@@ -105,7 +115,7 @@ def test_slices_while_paused_land_on_the_same_tick():
         while client.clock != "paused":
             client.receive()
         client.send(type="plant", q=0, r=0, species="straight-vine", speed="1")
-        client.send(type="plant", q=0, r=8, species="straight-vine", speed="1")
+        client.send(type="plant", q=0, r=60, species="straight-vine", speed="1")
         client.send(type="step", n=6)
         tick = client.tick
         vines = {
@@ -124,6 +134,44 @@ def test_slices_while_paused_land_on_the_same_tick():
         assert client.send(type="resume")["clock"] == "running"
         while client.tick < tick + 3:
             client.receive()
+
+
+def test_client_knows_the_details_of_exactly_the_plants_on_its_board():
+    settings = {
+        "branch_chance": 30,
+        "branch_min": 1,
+        "branch_max": 2,
+        "calm_min": 0,
+        "calm_max": 5,
+        "turn_chance": 20,
+        "cut_response": "multiply",
+    }
+    app = create_app(tick_interval=3600, frontend_dir=None)
+    with TestClient(app).websocket_connect("/ws") as websocket:
+        client = ClientBoard(websocket)
+        room = only_room(app)
+        custom = next(species for species in client.welcome["species"] if species["id"] == "custom")
+        assert len(custom["settings"]) == 7
+        assert client.plants == {}
+
+        client.send(type="pause")
+        client.send(type="plant", q=0, r=0, species="straight-vine", speed="0.5")
+        client.send(type="plant", q=0, r=30, species="custom", speed="1", settings=settings)
+        client.send(type="step", n=8)
+        assert client.plants == {
+            1: {"id": 1, "species": "straight-vine", "speed": "1/2", "settings": None},
+            2: {"id": 2, "species": "custom", "speed": "1", "settings": settings},
+        }
+        assert client.matches(room)
+
+        rejected = client.send(type="plant", q=9, r=9, species="custom", speed="1", settings={**settings, "branch_max": 9})
+        assert rejected["code"] == "bad_settings"
+        assert rejected["message"] == "Branches max must be from 1 to 4."
+
+        client.send(type="cut", q=0, r=0)  # the vine's root
+        assert list(client.plants) == [2]
+        assert {plant["id"] for plant in room.board.plants_snapshot()} == {2}
+        assert client.matches(room)
 
 
 def test_running_room_pushes_growth():
@@ -177,3 +225,16 @@ def test_frontend_is_served():
     response = TestClient(create_app()).get("/")
     assert response.status_code == 200
     assert "<title>Plantastic</title>" in response.text
+
+
+def test_frontend_files_are_always_revalidated():
+    client = TestClient(create_app())
+    for path in ("/", "/js/main.js", "/css/style.css"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-cache"
+
+    script = client.get("/js/main.js")
+    unchanged = client.get("/js/main.js", headers={"If-None-Match": script.headers["etag"]})
+    assert unchanged.status_code == 304
+    assert unchanged.headers["cache-control"] == "no-cache"

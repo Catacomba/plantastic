@@ -14,7 +14,14 @@ export function connect(handlers) {
     tick: 0,
     cells: new Map(),
     tips: [],
+    plants: new Map(), // plant id -> { id, species, speed, settings }
+    tickMs: null, // time available per iteration while the clock runs
+    stats: null, // cost of the iterations the latest update advanced, if any
   };
+
+  // Set by the page while the performance metrics are on. When it is off,
+  // messages are not timed or measured.
+  let measuring = false;
 
   const scheme = location.protocol === "https:" ? "wss" : "ws";
   const socket = new WebSocket(`${scheme}://${location.host}/ws`);
@@ -24,12 +31,23 @@ export function connect(handlers) {
   }
 
   function applyBoard(message) {
+    for (const plant of message.plants) state.plants.set(plant.id, plant);
     state.tick = message.tick;
     state.clock = message.clock;
     state.tips = message.tips;
   }
 
+  // A plant with no cells left has been removed.
+  function forgetGonePlants() {
+    const alive = new Set();
+    for (const cell of state.cells.values()) alive.add(cell.plant);
+    for (const id of state.plants.keys()) {
+      if (!alive.has(id)) state.plants.delete(id);
+    }
+  }
+
   socket.addEventListener("message", (event) => {
+    const meta = measuring ? { arrived: performance.now(), bytes: event.data.length } : null;
     const message = JSON.parse(event.data);
     switch (message.type) {
       case "welcome":
@@ -38,7 +56,9 @@ export function connect(handlers) {
         state.mode = message.mode;
         state.seed = message.seed;
         state.species = message.species;
+        state.tickMs = message.tick_ms;
         state.cells.clear();
+        state.plants.clear();
         message.cells.forEach(setCell);
         applyBoard(message);
         console.info(
@@ -52,7 +72,9 @@ export function connect(handlers) {
         message.added.forEach(setCell);
         message.changed.forEach(setCell);
         applyBoard(message);
-        handlers.onUpdate?.(state);
+        if (message.removed.length) forgetGonePlants();
+        state.stats = message.stats;
+        handlers.onUpdate?.(state, meta);
         break;
       case "error":
         handlers.onError?.(message);
@@ -76,7 +98,11 @@ export function connect(handlers) {
 
   return {
     state,
-    plant: (q, r, species, speed) => send({ type: "plant", q, r, species, speed }),
+    set measuring(value) {
+      measuring = Boolean(value);
+    },
+    // `settings` is left out for species that have none.
+    plant: (q, r, species, speed, settings) => send({ type: "plant", q, r, species, speed, settings }),
     cut: (q, r) => send({ type: "cut", q, r }),
     slice: (hexes) => send({ type: "slice", hexes }),
     pause: () => send({ type: "pause" }),

@@ -8,14 +8,14 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 
 from .hex import Hex, neighbor
-from .species import CATALOG, Species
+from .species import CATALOG, SettingsError, Species
 
 ROOT = "root"
 SEGMENT = "segment"
 STUMP = "stump"
 
 MAX_SPEED = Fraction(10)
-DEFAULT_MAX_CELLS = 20_000
+DEFAULT_MAX_CELLS = 100_000
 ONE = Fraction(1)
 
 
@@ -53,6 +53,18 @@ class Plant:
     speed: Fraction
     owner: str
     root: Hex
+    # Fixed when the seed is planted. Nothing changes them afterwards.
+    settings: dict | None = None
+    # What the species remembers about the plant, such as which way it turns.
+    state: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "species": self.species_id,
+            "speed": str(self.speed),
+            "settings": self.settings,
+        }
 
 
 @dataclass
@@ -63,6 +75,12 @@ class Tip:
     heading: int
     progress: Fraction = Fraction(0)
     blocked: bool = False
+    # What the species remembers about this tip between hexes.
+    state: dict = field(default_factory=dict)
+    # Whether the tip has made its growth decision for the hex it is about to enter.
+    decided: bool = False
+    # Whether the tip ends once it has entered that hex.
+    last: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -86,7 +104,14 @@ class Changes:
         self._added: dict[Hex, dict] = {}
         self._changed: dict[Hex, dict] = {}
         self._removed: dict[Hex, None] = {}
+        self._plants: dict[int, dict] = {}
         self.full = False
+        # How many times an iteration tried to move a tip that was due,
+        # whether or not it moved. The measure of the loop's work.
+        self.visits = 0
+
+    def add_plant(self, plant: Plant) -> None:
+        self._plants[plant.id] = plant.to_dict()
 
     def add(self, cell: Cell) -> None:
         self._added[cell.hex] = cell.to_dict()
@@ -112,7 +137,14 @@ class Changes:
                 self._added[hex] = cell
             else:
                 self._changed[hex] = cell
+        self._plants.update(other._plants)
         self.full = self.full or other.full
+        self.visits += other.visits
+
+    @property
+    def plants(self) -> list[dict]:
+        """Details of the plants created by these changes."""
+        return list(self._plants.values())
 
     @property
     def added(self) -> list[dict]:
@@ -174,6 +206,8 @@ class World:
         self.cells: dict[Hex, Cell] = {}
         self.plants: dict[int, Plant] = {}
         self.tips: dict[int, Tip] = {}
+        # Tips by the cell they sit on, kept in step with ``tips``.
+        self._tips_on: dict[Hex, list[Tip]] = {}
         self._next_plant_id = 1
         self._next_tip_id = 1
 
@@ -189,13 +223,15 @@ class World:
     def tips_snapshot(self) -> list[dict]:
         return [tip.to_dict() for tip in self.tips.values()]
 
+    def plants_snapshot(self) -> list[dict]:
+        return [plant.to_dict() for plant in self.plants.values()]
+
     def can_sprout(self, plant: Plant, cell: Hex, heading: int) -> bool:
         """Whether a new tip at ``cell`` with ``heading`` has room and is not a duplicate."""
         if neighbor(cell, heading) in self.cells:
             return False
         return not any(
-            tip.plant_id == plant.id and tip.cell == cell and tip.heading == heading
-            for tip in self.tips.values()
+            tip.plant_id == plant.id and tip.heading == heading for tip in self._tips_on.get(cell, ())
         )
 
     # -- actions -----------------------------------------------------------
@@ -207,11 +243,16 @@ class World:
         speed: object,
         owner: str,
         direction: int | None = None,
+        settings: object = None,
     ) -> Changes:
         species = self.catalog.get(species_id)
         if species is None:
             raise SimError("unknown_species", f"There is no species called '{species_id}'.")
         speed = parse_speed(speed)
+        try:
+            settings = species.validate(settings)
+        except SettingsError as error:
+            raise SimError("bad_settings", str(error)) from None
         if hex in self.cells:
             raise SimError("occupied", "That hex is occupied.")
         if self.is_full:
@@ -219,7 +260,7 @@ class World:
         if direction is None:
             direction = self.rng.randrange(6)
 
-        plant = Plant(self._next_plant_id, species_id, speed, owner, hex)
+        plant = Plant(self._next_plant_id, species_id, speed, owner, hex, settings, species.new_plant_state())
         self._next_plant_id += 1
         self.plants[plant.id] = plant
         root = Cell(hex, plant.id, ROOT, None)
@@ -228,6 +269,7 @@ class World:
 
         changes = Changes()
         changes.add(root)
+        changes.add_plant(plant)
         return changes
 
     def step(self) -> Changes:
@@ -237,7 +279,9 @@ class World:
 
         for tip in self.tips.values():
             tip.progress += self.plants[tip.plant_id].speed
-            if tip.blocked:
+            if tip.decided:
+                # Still waiting to enter the hex it chose, behind a cell or a
+                # full board. Waiting banks no more than that one hex.
                 tip.progress = min(tip.progress, ONE)
 
         # Tips take turns one hex at a time, earliest plant then earliest tip
@@ -250,6 +294,7 @@ class World:
             for tip in order:
                 if tip.id in stalled or tip.progress < 1 or tip.id not in self.tips:
                     continue
+                changes.visits += 1
                 if self._advance(tip, changes):
                     advanced = True
                 else:
@@ -281,8 +326,10 @@ class World:
         changes.change(cell)
 
         species = self.catalog[plant.species_id]
-        for sprout_cell, heading in species.on_cut(plant, hex, self):
-            self._add_tip(plant, sprout_cell, heading)
+        for sprout in species.on_cut(plant, hex, self):
+            heading = sprout.heading % 6
+            if self.can_sprout(plant, sprout.cell, heading):
+                self._add_tip(plant, sprout.cell, heading, sprout.state)
         return changes
 
     def slice(self, hexes) -> Changes:
@@ -301,25 +348,35 @@ class World:
 
     # -- internals ---------------------------------------------------------
 
-    def _add_tip(self, plant: Plant, cell: Hex, heading: int) -> Tip:
-        tip = Tip(self._next_tip_id, plant.id, cell, heading)
+    def _add_tip(self, plant: Plant, cell: Hex, heading: int, state: dict | None = None) -> Tip:
+        if state is None:
+            state = self.catalog[plant.species_id].new_tip_state(plant, heading)
+        tip = Tip(self._next_tip_id, plant.id, cell, heading, state=state)
         self._next_tip_id += 1
         self.tips[tip.id] = tip
+        self._tips_on.setdefault(cell, []).append(tip)
         return tip
 
     def _advance(self, tip: Tip, changes: Changes) -> bool:
         """Try to move a due tip one hex. Returns whether it moved."""
         plant = self.plants[tip.plant_id]
-        if not tip.blocked:
-            # A blocked tip keeps its heading, so the species is not asked again.
-            headings = self.catalog[plant.species_id].grow(tip, self)
-            if not headings:
-                del self.tips[tip.id]
+        if not tip.decided:
+            # One decision for each hex entered. A tip that then has to wait
+            # keeps it, so waiting never rolls the dice again.
+            shoots = self.catalog[plant.species_id].grow(tip, plant, self)
+            if not shoots:
+                self._drop_tip(tip)
                 return False
-            tip.heading = headings[0] % 6
-            for heading in headings[1:]:
-                if self.can_sprout(plant, tip.cell, heading % 6):
-                    self._add_tip(plant, tip.cell, heading % 6)
+            own = shoots[0]
+            tip.heading = own.heading % 6
+            if own.state is not None:
+                tip.state = own.state
+            tip.last = own.last
+            tip.decided = True
+            for shoot in shoots[1:]:
+                heading = shoot.heading % 6
+                if self.can_sprout(plant, tip.cell, heading):
+                    self._add_tip(plant, tip.cell, heading, shoot.state)
 
         target = neighbor(tip.cell, tip.heading)
         if target in self.cells:
@@ -334,10 +391,13 @@ class World:
         segment = Cell(target, plant.id, SEGMENT, tip.cell)
         self.cells[target] = segment
         self.cells[tip.cell].children.append(target)
-        tip.cell = target
+        self._move_tip(tip, target)
         tip.progress -= 1
         tip.blocked = False
+        tip.decided = False
         changes.add(segment)
+        if tip.last:
+            self._drop_tip(tip)
         return True
 
     def _descendants(self, hex: Hex) -> set[Hex]:
@@ -354,7 +414,23 @@ class World:
             del self.cells[hex]
             changes.remove(hex)
 
+    def _drop_tip(self, tip: Tip) -> None:
+        del self.tips[tip.id]
+        here = self._tips_on[tip.cell]
+        here.remove(tip)
+        if not here:
+            del self._tips_on[tip.cell]
+
+    def _move_tip(self, tip: Tip, cell: Hex) -> None:
+        here = self._tips_on[tip.cell]
+        here.remove(tip)
+        if not here:
+            del self._tips_on[tip.cell]
+        tip.cell = cell
+        self._tips_on.setdefault(cell, []).append(tip)
+
     def _remove_tips_on(self, plant_id: int, hexes: set[Hex]) -> None:
-        for tip in list(self.tips.values()):
-            if tip.plant_id == plant_id and tip.cell in hexes:
-                del self.tips[tip.id]
+        for hex in hexes:
+            for tip in list(self._tips_on.get(hex, ())):
+                if tip.plant_id == plant_id:
+                    self._drop_tip(tip)

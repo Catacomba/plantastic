@@ -112,12 +112,13 @@ export class Board {
     window.addEventListener("resize", () => this.resize());
   }
 
-  // `onFrame` is called before each frame with the seconds since the last one.
+  // `onFrame` is called before each frame with the seconds since the last one
+  // and the frame's timestamp.
   start(onFrame) {
     const frame = (now) => {
       const dt = Math.min((now - this.lastFrame) / 1000, 0.1);
       this.lastFrame = now;
-      onFrame?.(dt);
+      onFrame?.(dt, now);
       this.updateGrid();
       this.drawTips(dt);
       this.renderer.render(this.scene, this.camera);

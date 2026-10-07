@@ -13,6 +13,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   height: 100%;
@@ -67,8 +71,79 @@ body {
   color: var(--muted);
 }
 
-.push {
-  margin-left: auto;
+/* The column at the top right: the settings menu and the metrics panel. It
+   lets clicks through to the board; only its boxes take them. */
+#side {
+  position: fixed;
+  top: 56px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.box {
+  pointer-events: auto;
+  width: 300px;
+  margin: 0;
+  background: var(--bar);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+#menu-toggle {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  background: none;
+  border: 0;
+  font-weight: 600;
+}
+
+#menu-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 10px 10px;
+}
+
+#menu-body .field {
+  justify-content: space-between;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.check input {
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+#metrics {
+  padding: 8px 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+#metrics > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+#metrics dt {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+#metrics dd {
+  margin: 0;
+  text-align: right;
 }
 
 .readout {
@@ -117,7 +192,7 @@ input[type="number"] {
 }
 
 input[type="range"] {
-  width: 160px;
+  width: 140px;
   padding: 0;
   accent-color: var(--accent);
 }
@@ -125,6 +200,34 @@ input[type="range"] {
 .tools {
   display: flex;
   gap: 4px;
+}
+
+.settings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding-left: 14px;
+  border-left: 1px solid var(--line);
+}
+
+.settings input[type="number"] {
+  width: 64px;
+}
+
+.settings .never {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#plant-info {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
 }
 
 .tools button[aria-checked="true"] {
@@ -136,7 +239,7 @@ input[type="range"] {
 
 #banner {
   position: fixed;
-  top: 64px;
+  top: 108px;
   left: 50%;
   transform: translateX(-50%);
   max-width: calc(100% - 32px);
@@ -146,9 +249,10 @@ input[type="range"] {
   border-radius: 8px;
 }
 
+/* Below the top bar: the tool bar at the bottom changes height as it wraps. */
 #toast {
   position: fixed;
-  bottom: 72px;
+  top: 60px;
   left: 50%;
   transform: translateX(-50%);
   max-width: calc(100% - 32px);
