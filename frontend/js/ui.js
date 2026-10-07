@@ -1,6 +1,7 @@
 // The controls around the board: clock, hex size, tools, and messages.
 
 import { MAX_HEX_SIZE, MIN_HEX_SIZE } from "./board.js";
+import { HISTORY } from "./metrics.js";
 
 const MAX_STEP = 1000;
 const MAX_SCATTER = 500;
@@ -232,6 +233,11 @@ export function setupUi({ net, metrics, boardCounts, onHexSize, onMetrics, onSca
   const menuBody = $("menu-body");
   const metricsToggle = $("metrics-toggle");
   const metricsPanel = $("metrics");
+  const graphsPanel = $("graphs");
+  const graphs = [
+    { series: "handleMs", canvas: $("g-handle"), label: $("g-handle-label"), color: "--text", format: millis },
+    { series: "tips", canvas: $("g-tips"), label: $("g-tips-label"), color: "--accent", format: whole },
+  ];
 
   function setMenuOpen(open) {
     menuBody.hidden = !open;
@@ -261,12 +267,61 @@ export function setupUi({ net, metrics, boardCounts, onHexSize, onMetrics, onSca
       $("m-grow").textContent =
         `${whole(now.grow.iterations)} iterations, ${millis(now.grow.totalMs)}, ${millis(now.grow.eachMs)} each`;
     }
+    drawGraphs(now.history);
+  }
+
+  // One line per graph, a point per update. The newest point sits at the
+  // right edge in both, so the same update lines up between them.
+  function drawGraphs(history) {
+    const style = getComputedStyle(document.documentElement);
+    for (const graph of graphs) {
+      const values = history[graph.series];
+      const peak = values.length ? Math.max(...values) : 0;
+      graph.label.textContent = values.length
+        ? `${graph.format(values[values.length - 1])} (peak ${graph.format(peak)})`
+        : "–";
+
+      // Sized from the box each time, so it stays sharp when the zoom changes.
+      const { canvas } = graph;
+      const ratio = window.devicePixelRatio || 1;
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      canvas.width = Math.round(width * ratio);
+      canvas.height = Math.round(height * ratio);
+      const context = canvas.getContext("2d");
+      context.scale(ratio, ratio);
+      if (!values.length) continue;
+
+      const color = style.getPropertyValue(graph.color).trim();
+      const scale = peak || 1; // all zeros draw along the bottom
+      const step = width / (HISTORY - 1);
+      const x = (i) => width - (values.length - 1 - i) * step;
+      const y = (value) => height - 1 - (value / scale) * (height - 2);
+      context.fillStyle = color;
+      context.strokeStyle = color;
+      if (values.length === 1) {
+        context.beginPath();
+        context.arc(width - 1.5, y(values[0]), 1.5, 0, 2 * Math.PI);
+        context.fill();
+        continue;
+      }
+      context.beginPath();
+      values.forEach((value, i) => context.lineTo(x(i), y(value)));
+      context.lineWidth = 1.5;
+      context.lineJoin = "round";
+      context.stroke();
+      context.lineTo(width, height);
+      context.lineTo(x(0), height);
+      context.globalAlpha = 0.15;
+      context.fill();
+    }
   }
 
   // Off means off: no panel, no timer, and nothing measured.
   function setMetrics(on) {
     metricsToggle.checked = on;
     metricsPanel.hidden = !on;
+    graphsPanel.hidden = !on;
     onMetrics(on);
     clearInterval(metricsTimer);
     metricsTimer = null;

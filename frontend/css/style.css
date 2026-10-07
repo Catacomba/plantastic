@@ -71,7 +71,8 @@ body {
   color: var(--muted);
 }
 
-/* The column at the top right: the settings menu and the metrics panel. It
+/* The column at the top right: the settings menu, the metrics panel, and the
+   graphs. It
    lets clicks through to the board; only its boxes take them. */
 #side {
   position: fixed;
@@ -144,6 +145,31 @@ body {
 #metrics dd {
   margin: 0;
   text-align: right;
+}
+
+#graphs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+#graphs p {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 2px;
+}
+
+#graphs p > span:first-child {
+  color: var(--muted);
+}
+
+#graphs canvas {
+  display: block;
+  width: 100%;
+  height: 40px;
 }
 
 .readout {

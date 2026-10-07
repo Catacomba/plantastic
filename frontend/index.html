@@ -80,6 +80,17 @@
         <dt>Last grow</dt><dd id="m-grow"></dd>
       </div>
     </dl>
+
+    <section id="graphs" class="box" hidden aria-label="Performance graphs">
+      <div title="The time this browser took to read each update and rebuild the board, one point per update, newest on the right. The peak is the largest value shown.">
+        <p><span>Update handling</span><span id="g-handle-label"></span></p>
+        <canvas id="g-handle" role="img" aria-label="Update handling time over the last 120 updates"></canvas>
+      </div>
+      <div title="Growing tips after each update, one point per update, newest on the right. Points line up with the graph above.">
+        <p><span>Tips</span><span id="g-tips-label"></span></p>
+        <canvas id="g-tips" role="img" aria-label="Number of tips over the last 120 updates"></canvas>
+      </div>
+    </section>
   </aside>
 
   <footer class="bar" id="tool-bar">

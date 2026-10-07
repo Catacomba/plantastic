@@ -3,6 +3,7 @@
 
 const FRAME_WINDOW_MS = 1000;
 const RECENT_UPDATES = 10;
+export const HISTORY = 120; // updates kept for the graphs
 
 export function createMetrics() {
   let enabled = false;
@@ -12,6 +13,9 @@ export function createMetrics() {
   let grow = null; // { iterations, totalMs, eachMs } of the last multi-iteration batch
   let update = null; // { bytes, handleMs } of the latest update
   let tickMs = null;
+  // One entry per update, oldest first, for the graphs.
+  let handleHistory = [];
+  let tipHistory = [];
 
   function reset() {
     frames = [];
@@ -19,6 +23,8 @@ export function createMetrics() {
     iteration = null;
     grow = null;
     update = null;
+    handleHistory = [];
+    tipHistory = [];
   }
 
   return {
@@ -39,10 +45,16 @@ export function createMetrics() {
 
     // Called after an update from the server has been applied and drawn.
     // `stats` is the server's { iterations, step_ms, visits }, or null when
-    // the update advanced nothing.
-    update({ bytes, handleMs, stats, tickMs: available }) {
+    // the update advanced nothing. `tips` is the number of tips after it.
+    update({ bytes, handleMs, stats, tips, tickMs: available }) {
       if (!enabled) return;
       update = { bytes, handleMs };
+      handleHistory.push(handleMs);
+      tipHistory.push(tips);
+      if (handleHistory.length > HISTORY) {
+        handleHistory.shift();
+        tipHistory.shift();
+      }
       if (available) tickMs = available;
       if (!stats || !stats.iterations) return;
       const eachMs = stats.step_ms / stats.iterations;
@@ -67,6 +79,8 @@ export function createMetrics() {
         updateBytes: update ? update.bytes : null,
         handleMs: update ? update.handleMs : null,
         grow,
+        // Read-only: the same update is at the same index in both.
+        history: { handleMs: handleHistory, tips: tipHistory },
       };
     },
   };

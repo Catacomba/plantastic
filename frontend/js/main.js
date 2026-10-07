@@ -48,6 +48,7 @@ function redraw(state, meta) {
       bytes: meta.bytes,
       handleMs: performance.now() - meta.arrived,
       stats: state.stats,
+      tips: state.tips.length,
       tickMs: state.tickMs,
     });
   }

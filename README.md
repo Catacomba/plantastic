@@ -58,6 +58,13 @@ With **Performance metrics** on, a panel below the menu shows:
 
 What drives cost: the server works per **tip**, not per plant, and a waiting tip is visited on every iteration just like a growing one. The browser redraws per **cell**, and every update carries the full list of tips, so update size grows with the tip count. A straight vine has one tip however long it is; a Burst or a branch-heavy custom plant can have thousands.
 
+Below the panel are two graphs of the last 120 updates from the server, newest on the right:
+
+- **Update handling**: how long the browser took to read each update and rebuild the board, the same time the Update row shows.
+- **Tips**: the number of growing tips after each update.
+
+Each graph plots one point per update, not per second, so both stand still while the game is paused and a **Grow** adds a single point. A point in one graph lines up with the point for the same update in the other. Each graph is scaled to the largest value it currently shows, which is printed beside it as the peak. The graphs follow the **Performance metrics** switch, and turning it off discards their history.
+
 The metrics only measure. Nothing is limited apart from the board's 100,000 cells. While the switch is off the browser measures nothing.
 
 ## Plants
