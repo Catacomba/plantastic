@@ -78,3 +78,42 @@ def test_invalid_slices_fail_validation(hexes):
     with pytest.raises(GameError) as error:
         parse_command(json.dumps({"type": "slice", "hexes": hexes}))
     assert error.value.code == "bad_message"
+
+
+def test_clear_and_scatter_parse():
+    assert parse_command(json.dumps({"type": "clear"})).type == "clear"
+    scatter = parse_command(
+        json.dumps({"type": "scatter", "count": 500, "q": 3, "r": -2, "half_width": 150, "half_height": 0})
+    )
+    assert (scatter.count, scatter.q, scatter.r, scatter.half_width, scatter.half_height) == (500, 3, -2, 150, 0)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"count": 0},
+        {"count": 501},
+        {"count": 2.5},
+        {"count": "10"},
+        {"count": True},
+        {"count": None},
+        {"half_width": 151},
+        {"half_height": 151},
+        {"half_width": -1},
+        {"half_height": 1.5},
+        {"q": 0.5},
+        {"extra": 1},
+    ],
+)
+def test_invalid_scatters_fail_validation(change):
+    message = {"type": "scatter", "count": 10, "q": 0, "r": 0, "half_width": 5, "half_height": 5, **change}
+    if change.get("count", 1) is None:
+        del message["count"]
+    with pytest.raises(GameError) as error:
+        parse_command(json.dumps(message))
+    assert error.value.code == "bad_message"
+
+
+def test_clear_takes_no_fields():
+    with pytest.raises(GameError):
+        parse_command(json.dumps({"type": "clear", "all": True}))

@@ -24,6 +24,8 @@ class ClientBoard:
         if message["type"] == "welcome":
             self.cells = {(cell["q"], cell["r"]): cell for cell in message["cells"]}
         elif message["type"] == "update":
+            if message["cleared"]:
+                self.cells.clear()
             for q, r in message["removed"]:
                 self.cells.pop((q, r), None)
             for cell in message["added"] + message["changed"]:
@@ -172,6 +174,38 @@ def test_client_knows_the_details_of_exactly_the_plants_on_its_board():
         assert list(client.plants) == [2]
         assert {plant["id"] for plant in room.board.plants_snapshot()} == {2}
         assert client.matches(room)
+
+
+def test_scatter_grow_clear_keeps_client_and_server_identical():
+    app = create_app(tick_interval=3600, frontend_dir=None)
+    with TestClient(app).websocket_connect("/ws") as websocket:
+        client = ClientBoard(websocket)
+        room = only_room(app)
+        region = {"q": 0, "r": 0, "half_width": 25, "half_height": 15}
+
+        client.send(type="pause")
+        first = client.send(type="scatter", count=40, **region)
+        assert first["scattered"] == {"asked": 40, "planted": 40}
+        assert len(client.plants) == 40
+        client.send(type="step", n=10)
+        assert len(client.cells) > 100
+        assert client.matches(room)
+
+        cleared = client.send(type="clear")
+        assert cleared["cleared"] is True
+        assert client.cells == {} and client.plants == {} and client.tips == []
+        assert client.tick == 10
+        assert client.matches(room)
+
+        client.send(type="scatter", count=15, **region)
+        client.send(type="step", n=5)
+        assert len(client.plants) == 15
+        assert min(client.plants) > 40  # ids are never reused after a clear
+        assert {details["id"] for details in room.board.plants_snapshot()} == set(client.plants)
+        assert client.matches(room)
+
+        assert client.send(type="scatter", count=0, **region)["code"] == "bad_message"
+        assert client.errors == ["bad_message"]
 
 
 def test_running_room_pushes_growth():

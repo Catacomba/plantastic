@@ -17,6 +17,7 @@ export function connect(handlers) {
     plants: new Map(), // plant id -> { id, species, speed, settings }
     tickMs: null, // time available per iteration while the clock runs
     stats: null, // cost of the iterations the latest update advanced, if any
+    scattered: null, // { asked, planted } when the latest update answered a scatter
   };
 
   // Set by the page while the performance metrics are on. When it is off,
@@ -68,12 +69,18 @@ export function connect(handlers) {
         handlers.onWelcome?.(state);
         break;
       case "update":
+        if (message.cleared) {
+          // The whole board went at once; the cells are not listed.
+          state.cells.clear();
+          state.plants.clear();
+        }
         for (const [q, r] of message.removed) state.cells.delete(hexKey(q, r));
         message.added.forEach(setCell);
         message.changed.forEach(setCell);
         applyBoard(message);
         if (message.removed.length) forgetGonePlants();
         state.stats = message.stats;
+        state.scattered = message.scattered;
         handlers.onUpdate?.(state, meta);
         break;
       case "error":
@@ -105,6 +112,9 @@ export function connect(handlers) {
     plant: (q, r, species, speed, settings) => send({ type: "plant", q, r, species, speed, settings }),
     cut: (q, r) => send({ type: "cut", q, r }),
     slice: (hexes) => send({ type: "slice", hexes }),
+    clear: () => send({ type: "clear" }),
+    // `region` is { q, r, half_width, half_height }.
+    scatter: (count, region) => send({ type: "scatter", count, ...region }),
     pause: () => send({ type: "pause" }),
     resume: () => send({ type: "resume" }),
     step: (n) => send({ type: "step", n }),

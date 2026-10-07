@@ -8,6 +8,7 @@ import { setupUi } from "./ui.js";
 const HEX_SIZE_KEY = "plantastic.hexSize";
 const DEFAULT_HEX_SIZE = 28;
 const MAX_SLICE_HEXES = 512; // the most hexes the server accepts in one slice
+const MAX_REGION_HALF = 150; // the furthest a scatter region may reach, in hexes
 const HOVER_COLORS = { seed: 0x5fbf7a, scissors: 0xd9654f, mower: 0xd9654f };
 
 function loadHexSize() {
@@ -41,6 +42,7 @@ function redraw(state, meta) {
   board.setTips(state.tips);
   ui.sync();
   showHover(); // what is under a resting cursor may have changed
+  reportScatter(state.scattered);
   if (meta) {
     metrics.update({
       bytes: meta.bytes,
@@ -49,6 +51,34 @@ function redraw(state, meta) {
       tickMs: state.tickMs,
     });
   }
+}
+
+// Says so when a scatter planted fewer seeds than were asked for.
+function reportScatter(scattered) {
+  if (!scattered || scattered.planted === scattered.asked) return;
+  if (scattered.planted === 0) {
+    ui.toast("No empty space in view for new plants.");
+  } else {
+    ui.toast(`Planted ${scattered.planted} of ${scattered.asked}: the visible area ran out of empty space.`);
+  }
+}
+
+// The part of the board in view between the two bars, as the region a scatter
+// takes: a centre hex, and how far it reaches in hex widths and in rows. One
+// hex is held back on each side so that every root is fully in view.
+function visibleRegion() {
+  const top = document.getElementById("clock-bar").getBoundingClientRect().bottom;
+  const bottom = document.getElementById("tool-bar").getBoundingClientRect().top;
+  const [q, r] = board.hexAt(board.width / 2, (top + bottom) / 2);
+  const hexWidth = hex.SQRT3 * board.hexSize;
+  const rowHeight = 1.5 * board.hexSize;
+  const fit = (value) => Math.max(0, Math.min(MAX_REGION_HALF, Math.floor(value)));
+  return {
+    q,
+    r,
+    half_width: fit(board.width / 2 / hexWidth - 1),
+    half_height: fit((bottom - top) / 2 / rowHeight - 4 / 3),
+  };
 }
 
 // What the metrics panel counts on the board. Only asked for while it is shown.
@@ -87,6 +117,7 @@ const ui = setupUi({
   metrics,
   boardCounts,
   onHexSize: (size) => setHexSize(size),
+  onScatter: (count) => net.scatter(count, visibleRegion()),
   onMetrics(on) {
     metrics.enabled = on;
     net.measuring = on;

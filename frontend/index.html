@@ -21,7 +21,16 @@
     <button id="grow" type="button" disabled>Grow</button>
     <span class="readout">Iteration <strong id="tick">0</strong></span>
     <span class="readout">Cells <strong id="cell-count">0</strong></span>
+    <span class="field">
+      <label for="scatter-count">Random</label>
+      <input id="scatter-count" type="number" min="1" max="500" step="1" value="10" disabled
+             title="How many random plants to add, from 1 to 500.">
+      <button id="scatter" type="button" disabled
+              title="Plant that many seeds of random species at random empty places in view.">Plant</button>
+    </span>
     <span class="readout" id="plant-info"></span>
+    <button id="clear" type="button" class="danger" disabled
+            title="Remove every plant from the board. This cannot be undone.">Clear</button>
   </header>
 
   <aside id="side" aria-label="Settings and performance">

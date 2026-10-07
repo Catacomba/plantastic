@@ -13,6 +13,8 @@ Exact numbers (speeds and progress) are strings such as `"0.25"` or `"1/4"`.
 | `plant` | `q`, `r`, `species`, `speed`, `settings` | Plant a seed. `speed` is hexagons per iteration, above 0 and at most 10. `settings` is an object, required for a species that has settings and left out (or `null`) for one that has none. |
 | `cut` | `q`, `r` | Cut the plant cell in that hex. |
 | `slice` | `hexes` | Cut along a path. `hexes` is a list of 1 to 512 `[q, r]` pairs in the order to cut. |
+| `clear` | | Remove every plant from the board. |
+| `scatter` | `count`, `q`, `r`, `half_width`, `half_height` | Plant `count` random seeds (1 to 500) inside a region. |
 | `pause` | | Stop the clock. |
 | `resume` | | Start the clock. |
 | `step` | `n` | Grow for `n` iterations (a whole number from 1 to 1000). Only while paused. |
@@ -20,6 +22,10 @@ Exact numbers (speeds and progress) are strings such as `"0.25"` or `"1/4"`.
 Unknown fields are rejected.
 
 `slice` cuts each hex that holds a living, non-root cell when its turn comes, and skips every other hex: empty hexes, stumps, and roots. It never returns `nothing_to_cut`, and a path that cuts nothing still gets an `update`. All cuts of one `slice` land on the same iteration. Removing a whole plant takes a `cut` on its root.
+
+`clear` empties the board and nothing else: the iteration number, the clock, and plant numbering carry on.
+
+`scatter` plants seeds on random empty hexes of a region. The region is a rectangle as seen on screen, centred on hex `q`, `r`: a hex at `q + dq`, `r + dr` is inside when `|dr| <= half_height` and `|dq + dr / 2| <= half_width`. Both half-sizes are whole numbers from 0 to 150. Each seed's species is drawn at random, independently, from the species with no settings, and it gets that species' default speed and a random direction. If the region or the board has room for fewer seeds, as many as fit are planted; that is not an error. The choices come from the room's random seed.
 
 ## Server to client
 
@@ -58,6 +64,8 @@ Sent after every iteration and after every applied command. Apply `removed`, the
 | `tips` | The complete current list of tips |
 | `clock` | `"running"` or `"paused"` |
 | `stats` | The cost of the iterations this update advanced, or `null` if it advanced none |
+| `cleared` | `true` when the whole board was emptied. Empty your cells and plants first, then apply the rest of the update. The emptied hexes are not listed in `removed`. |
+| `scattered` | `{asked, planted}` on the update that answers a `scatter`, otherwise `null` |
 
 `stats` is `{iterations, step_ms, visits}`. `iterations` is how many iterations the update advanced: 1 for a clock tick, up to `n` for a `step`. `step_ms` is the server's total compute time for them in milliseconds, to two decimals. It covers the simulation only, not building or sending the update. `visits` is the number of tip visits: attempts to move a tip that was due, whether or not it moved. A tip that is waiting is visited on every iteration. `visits` depends only on the board, so it is the same on every replay; `step_ms` is a measurement and varies.
 

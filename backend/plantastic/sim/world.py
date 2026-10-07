@@ -97,7 +97,8 @@ class Tip:
 class Changes:
     """What a mutation did to the cells, in a form a client can replay.
 
-    Apply ``removed`` first, then ``added``, then ``changed``.
+    If ``cleared`` is set, empty the board first. Then apply ``removed``,
+    then ``added``, then ``changed``.
     """
 
     def __init__(self) -> None:
@@ -109,6 +110,10 @@ class Changes:
         # How many times an iteration tried to move a tip that was due,
         # whether or not it moved. The measure of the loop's work.
         self.visits = 0
+        # Whether the whole board was emptied. Said once, not hex by hex.
+        self.cleared = False
+        # For a scatter: how many seeds were asked for and how many were planted.
+        self.scattered: dict | None = None
 
     def add_plant(self, plant: Plant) -> None:
         self._plants[plant.id] = plant.to_dict()
@@ -128,6 +133,15 @@ class Changes:
         self._removed[hex] = None
 
     def merge(self, other: Changes) -> None:
+        if other.cleared:
+            # Nothing recorded before a clear still matters.
+            self._added.clear()
+            self._changed.clear()
+            self._removed.clear()
+            self._plants.clear()
+            self.cleared = True
+        if other.scattered is not None:
+            self.scattered = other.scattered
         for hex in other._removed:
             self.remove(hex)
         for hex, cell in other._added.items():
@@ -160,6 +174,8 @@ class Changes:
 
     def apply_to(self, cells: dict[Hex, dict]) -> None:
         """Replay onto a client-style cell map keyed by hex."""
+        if self.cleared:
+            cells.clear()
         for hex in self._removed:
             cells.pop(hex, None)
         for hex, cell in self._added.items():
@@ -330,6 +346,53 @@ class World:
             heading = sprout.heading % 6
             if self.can_sprout(plant, sprout.cell, heading):
                 self._add_tip(plant, sprout.cell, heading, sprout.state)
+        return changes
+
+    def clear(self) -> Changes:
+        """Remove every plant, cell, and tip.
+
+        The iteration number, the random generator, and the id counters are
+        left alone, so later plants get ids that were never used.
+        """
+        self.cells.clear()
+        self.plants.clear()
+        self.tips.clear()
+        self._tips_on.clear()
+        changes = Changes()
+        changes.cleared = True
+        return changes
+
+    def scatter(self, count: int, center: Hex, half_width: int, half_height: int, owner: str) -> Changes:
+        """Plant up to ``count`` seeds of random species on random empty hexes of a region.
+
+        The region is a rectangle as seen on screen: ``half_height`` rows above
+        and below the centre, and ``half_width`` hex widths to either side. A
+        hex's screen column is ``q + r / 2``, which is why rows are offset.
+
+        Species are drawn independently from those that take no settings. If
+        the region or the board has room for fewer seeds, as many as fit are
+        planted. Every choice comes from the board's random generator.
+        """
+        free = []
+        for dr in range(-half_height, half_height + 1):
+            # |dq + dr / 2| <= half_width, kept in whole numbers.
+            low = -((2 * half_width + dr) // 2)
+            high = (2 * half_width - dr) // 2
+            for dq in range(low, high + 1):
+                hex = (center[0] + dq, center[1] + dr)
+                if hex not in self.cells:
+                    free.append(hex)
+
+        presets = [species for species in self.catalog.values() if not species.settings]
+        room = max(0, self.max_cells - len(self.cells))
+        planted = min(count, len(free), room) if presets else 0
+        chosen = free if planted == len(free) else sorted(self.rng.sample(free, planted))
+
+        changes = Changes()
+        for hex in chosen:
+            species = self.rng.choice(presets)
+            changes.merge(self.plant_seed(hex, species.id, species.default_speed, owner))
+        changes.scattered = {"asked": count, "planted": planted}
         return changes
 
     def slice(self, hexes) -> Changes:

@@ -3,6 +3,7 @@
 import { MAX_HEX_SIZE, MIN_HEX_SIZE } from "./board.js";
 
 const MAX_STEP = 1000;
+const MAX_SCATTER = 500;
 const TOAST_MS = 2600;
 const METRICS_REFRESH_MS = 250;
 const MENU_OPEN_KEY = "plantastic.menuOpen";
@@ -41,10 +42,13 @@ function kilobytes(bytes) {
 
 const $ = (id) => document.getElementById(id);
 
-export function setupUi({ net, metrics, boardCounts, onHexSize, onMetrics }) {
+export function setupUi({ net, metrics, boardCounts, onHexSize, onMetrics, onScatter }) {
   const pauseButton = $("pause");
   const growButton = $("grow");
   const stepCount = $("step-count");
+  const scatterCount = $("scatter-count");
+  const scatterButton = $("scatter");
+  const clearButton = $("clear");
   const hexSize = $("hex-size");
   const species = $("species");
   const speed = $("speed");
@@ -181,6 +185,7 @@ export function setupUi({ net, metrics, boardCounts, onHexSize, onMetrics }) {
     pauseButton.disabled = !connected;
     growButton.disabled = !connected || running;
     stepCount.disabled = !connected || running;
+    scatterCount.disabled = scatterButton.disabled = clearButton.disabled = !connected;
     growButton.title = running ? "Pause the game to grow by a set number of iterations." : "";
     $("tick").textContent = tick;
     $("cell-count").textContent = cells.size;
@@ -200,6 +205,20 @@ export function setupUi({ net, metrics, boardCounts, onHexSize, onMetrics }) {
     net.step(count);
   }
   growButton.addEventListener("click", grow);
+
+  function scatter() {
+    const count = Number(scatterCount.value);
+    if (scatterCount.value.trim() === "" || !Number.isInteger(count) || count < 1 || count > MAX_SCATTER) {
+      toast(`Enter a whole number of plants from 1 to ${MAX_SCATTER}.`);
+      return;
+    }
+    onScatter(count);
+  }
+  scatterButton.addEventListener("click", scatter);
+  scatterCount.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !scatterButton.disabled) scatter();
+  });
+  clearButton.addEventListener("click", () => net.clear());
   stepCount.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !growButton.disabled) grow();
   });

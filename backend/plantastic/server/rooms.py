@@ -9,11 +9,13 @@ from collections.abc import Awaitable, Callable
 
 from ..sim.world import DEFAULT_MAX_CELLS, Changes, SimError, World
 from .protocol import (
+    ClearCommand,
     CutCommand,
     GameError,
     PauseCommand,
     PlantCommand,
     ResumeCommand,
+    ScatterCommand,
     SliceCommand,
     StepCommand,
     notice_message,
@@ -109,6 +111,10 @@ class Room:
             "plants": changes.plants,
             "tips": board.tips_snapshot(),
             "clock": self.clock,
+            # True when the whole board was emptied; the cells are not listed.
+            "cleared": changes.cleared,
+            # For a scatter, how many seeds were asked for and planted; otherwise None.
+            "scattered": changes.scattered,
             # The cost of the iterations this update advanced, or None if it advanced none.
             "stats": stats,
         }
@@ -162,6 +168,13 @@ class Room:
                 return [self._update(self.board.cut((command.q, command.r)))]
             if isinstance(command, SliceCommand):
                 return [self._update(self.board.slice(command.hexes))]
+            if isinstance(command, ClearCommand):
+                return [self._update(self.board.clear())]
+            if isinstance(command, ScatterCommand):
+                changes = self.board.scatter(
+                    command.count, (command.q, command.r), command.half_width, command.half_height, player
+                )
+                return [self._update(changes)]
         except SimError as error:
             raise GameError(error.code, error.message) from None
         if isinstance(command, PauseCommand):

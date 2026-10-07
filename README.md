@@ -32,6 +32,8 @@ Server options:
 - **Scissors**: click a plant cell to cut it, or drag to cut every cell the cursor passes while the game keeps running. A cut cell becomes a stump and everything beyond it is removed.
 - **Mower**: press to pause the game, drag to mark a path, and release to cut the whole path at once. The game resumes if it was running. Escape cancels the path.
 - A drag never cuts a root. To remove a whole plant, click its root with the scissors or the mower.
+- **Random**: enter a number and press **Plant** to scatter that many seeds at random empty places in the part of the board you can see. Each is a random pick from the seven plants that need no settings, so the mix varies. Zoom out first for a wider spread.
+- **Clear** removes every plant at once. It does not ask first, and it leaves the clock and the iteration counter as they are.
 - **Pause / Resume** stops and starts the clock. While paused, **Grow** advances the board by the number of iterations you enter.
 - **Drag with the right or middle mouse button** to pan, or hold **W A S D** or the **arrow keys**. Hold **Shift** to pan faster.
 - The mouse wheel changes how large the hexagons are drawn. The same setting is a slider in the **Settings** menu.

@@ -175,6 +175,15 @@ button:hover:not(:disabled) {
   border-color: var(--accent);
 }
 
+/* A destructive action: quiet until pointed at. */
+button.danger {
+  color: var(--danger);
+}
+
+button.danger:hover:not(:disabled) {
+  border-color: var(--danger);
+}
+
 button:disabled,
 input:disabled,
 select:disabled {

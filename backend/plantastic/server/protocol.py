@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, TypeA
 
 COORD_LIMIT = 2**31
 MAX_SLICE_HEXES = 512
+MAX_SCATTER = 500
+MAX_REGION_HALF = 150
 
 Coord = Annotated[StrictInt, Field(ge=-COORD_LIMIT, le=COORD_LIMIT)]
 
@@ -48,6 +50,20 @@ class SliceCommand(_Command):
     hexes: list[tuple[Coord, Coord]] = Field(min_length=1, max_length=MAX_SLICE_HEXES)
 
 
+class ClearCommand(_Command):
+    type: Literal["clear"]
+
+
+class ScatterCommand(_Command):
+    type: Literal["scatter"]
+    count: Annotated[StrictInt, Field(ge=1, le=MAX_SCATTER)]
+    # The region: a centre hex, and how far it reaches in hex widths and in rows.
+    q: Coord
+    r: Coord
+    half_width: Annotated[StrictInt, Field(ge=0, le=MAX_REGION_HALF)]
+    half_height: Annotated[StrictInt, Field(ge=0, le=MAX_REGION_HALF)]
+
+
 class PauseCommand(_Command):
     type: Literal["pause"]
 
@@ -63,7 +79,16 @@ class StepCommand(_Command):
 
 
 Command = Annotated[
-    Union[PlantCommand, CutCommand, SliceCommand, PauseCommand, ResumeCommand, StepCommand],
+    Union[
+        PlantCommand,
+        CutCommand,
+        SliceCommand,
+        ClearCommand,
+        ScatterCommand,
+        PauseCommand,
+        ResumeCommand,
+        StepCommand,
+    ],
     Field(discriminator="type"),
 ]
 

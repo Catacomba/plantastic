@@ -394,3 +394,74 @@ def test_measuring_does_not_change_the_game():
         return history
 
     assert play() == play()
+
+
+def scatter(count, q=0, r=0, half_width=20, half_height=20):
+    return command(type="scatter", count=count, q=q, r=r, half_width=half_width, half_height=half_height)
+
+
+@pytest.mark.parametrize("running", [True, False])
+def test_clear_empties_the_board_and_leaves_the_clock_and_tick_alone(running):
+    room = two_vine_room(running)
+    (update,) = room.handle(PLAYER, command(type="clear"))
+
+    assert update["cleared"] is True
+    assert update["tick"] == 6
+    assert update["clock"] == ("running" if running else "paused")
+    assert update["added"] == update["removed"] == update["changed"] == update["tips"] == []
+    assert update["stats"] is None
+    assert not room.board.cells and not room.board.plants
+
+
+def test_clear_update_does_not_list_the_cells_it_removed():
+    room = paused_room()
+    room.handle(PLAYER, scatter(300, half_width=60, half_height=60))
+    room.handle(PLAYER, command(type="step", n=15))
+    assert len(room.board.cells) > 2000
+
+    (update,) = room.handle(PLAYER, command(type="clear"))
+    assert update["cleared"] is True and update["removed"] == []
+    assert len(json.dumps(update)) < 400
+
+
+def test_other_updates_are_not_marked_cleared():
+    room = paused_room()
+    (planted,) = room.handle(PLAYER, plant(0, 0))
+    (grown,) = room.handle(PLAYER, command(type="step", n=2))
+    assert planted["cleared"] is False and grown["cleared"] is False
+    assert planted["scattered"] is None and grown["scattered"] is None
+
+
+def test_scatter_plants_and_reports_asked_and_planted():
+    room = paused_room()
+    (update,) = room.handle(PLAYER, scatter(10))
+
+    assert update["scattered"] == {"asked": 10, "planted": 10}
+    assert len(update["added"]) == 10 and all(cell["kind"] == "root" for cell in update["added"])
+    assert len(update["plants"]) == 10 and all(details["settings"] is None for details in update["plants"])
+    assert len(update["tips"]) == 10
+    assert update["tick"] == 0 and update["clock"] == "paused" and update["stats"] is None
+    assert all(plant_.owner == PLAYER for plant_ in room.board.plants.values())
+
+
+def test_scattered_seeds_stay_inside_the_region():
+    room = paused_room()
+    (update,) = room.handle(PLAYER, scatter(200, q=7, r=-3, half_width=9, half_height=4))
+    for cell in update["added"]:
+        dq, dr = cell["q"] - 7, cell["r"] + 3
+        assert abs(dr) <= 4 and abs(dq + dr / 2) <= 9
+
+
+def test_scatter_with_too_little_room_is_not_an_error():
+    room = paused_room()
+    (update,) = room.handle(PLAYER, scatter(50, half_width=1, half_height=1))
+    assert update["scattered"] == {"asked": 50, "planted": 7}  # three in the middle row, two in each offset row
+    (again,) = room.handle(PLAYER, scatter(5, half_width=1, half_height=1))
+    assert again["scattered"] == {"asked": 5, "planted": 0}
+    assert again["added"] == []
+
+
+def test_mode_can_forbid_clearing_and_scattering():
+    room = Room(LookOnlyMode(), PLAYER, seed=1)
+    assert rejected(room, command(type="clear")) == "not_permitted"
+    assert rejected(room, scatter(5)) == "not_permitted"
