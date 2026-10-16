@@ -14,6 +14,18 @@
 
   <header class="bar" id="clock-bar">
     <button id="pause" type="button" disabled>Pause</button>
+    <div class="tools" id="speeds" role="radiogroup" aria-label="Game speed">
+      <button type="button" role="radio" aria-checked="true" data-speed="1" disabled
+              title="Normal speed.">1x</button>
+      <button type="button" role="radio" aria-checked="false" data-speed="2" disabled
+              title="Twice as fast.">2x</button>
+      <button type="button" role="radio" aria-checked="false" data-speed="5" disabled
+              title="Five times as fast.">5x</button>
+      <button type="button" role="radio" aria-checked="false" data-speed="10" disabled
+              title="Ten times as fast.">10x</button>
+      <button type="button" role="radio" aria-checked="false" data-speed="max" disabled
+              title="As fast as this page can draw. Waits while the tab is hidden.">Max</button>
+    </div>
     <label class="field">
       <span>Grow for</span>
       <input id="step-count" type="number" min="1" max="1000" step="1" value="10">
@@ -43,6 +55,10 @@
         <label class="check">
           <input id="metrics-toggle" type="checkbox">
           <span>Performance metrics</span>
+        </label>
+        <label class="check" title="Stop working on tips that cannot move until a cut frees them. The game plays out exactly the same; it only saves work.">
+          <input id="skip-stuck-toggle" type="checkbox" checked>
+          <span>Skip stuck tips</span>
         </label>
         <label class="field">
           <span>Hex size</span>
@@ -111,6 +127,11 @@
       <input id="speed" type="text" inputmode="decimal" size="6" value="1"
              title="Hexagons per iteration. 0.25 or 1/4 means one hexagon every 4 iterations.">
     </label>
+    <div class="field" title="The chance that a blocked tip takes another path. Ticked, every seed you plant, and every Random seed, gets this persistence instead of its species' own, even a custom plant.">
+      <label for="persistence">Persistence %</label>
+      <input id="persistence" type="number" min="0" max="100" step="1" value="50" disabled>
+      <label class="override"><input id="persistence-override" type="checkbox" disabled> Override</label>
+    </div>
     <div id="settings" class="settings" hidden
          title="These apply to seeds you plant from now on. A plant keeps the settings it was planted with."></div>
   </footer>

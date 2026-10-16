@@ -13,6 +13,7 @@ STRAIGHT = {
     "calm_min": 0,
     "calm_max": None,
     "turn_chance": 0,
+    "persistence": 0,
     "cut_response": "fork",
 }
 
@@ -124,7 +125,7 @@ def test_settings_are_stored_on_the_plant():
 
     assert world.plants[1].settings == settings
     assert world.plants[1].settings is not settings
-    assert world.plants[1].to_dict() == {"id": 1, "species": "custom", "speed": "1", "settings": settings}
+    assert world.plants[1].to_dict() == {"id": 1, "species": "custom", "speed": "1", "settings": settings, "persistence": 0}
 
 
 @pytest.mark.parametrize(
@@ -133,6 +134,9 @@ def test_settings_are_stored_on_the_plant():
         {"branch_chance": 150},
         {"branch_chance": -1},
         {"turn_chance": 101},
+        {"persistence": 101},
+        {"persistence": -1},
+        {"persistence": 50.5},
         {"branch_max": 5},
         {"branch_min": 0},
         {"calm_min": -1},
@@ -192,6 +196,8 @@ def test_settings_for_a_species_without_any_are_rejected():
     [
         {"branch_chance": 0, "turn_chance": 0},
         {"branch_chance": 100, "turn_chance": 100},
+        {"persistence": 0},
+        {"persistence": 100},
         {"branch_min": 4, "branch_max": 4},
         {"calm_min": 0, "calm_max": 0},
         {"calm_min": 1000, "calm_max": 1000},

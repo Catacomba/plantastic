@@ -11,11 +11,14 @@ export function connect(handlers) {
     seed: null,
     species: [],
     clock: "paused",
+    speed: 1, // 1, 2, 5, 10, or "max"
     tick: 0,
     cells: new Map(),
-    tips: [],
+    tips: [], // awake tips, sent in full with every message
+    sleeping: new Map(), // tip id -> tip: stuck tips, sent once when they fall asleep
+    skipStuck: true, // whether the room lets stuck tips sleep
     plants: new Map(), // plant id -> { id, species, speed, settings }
-    tickMs: null, // time available per iteration while the clock runs
+    tickMs: null, // time available per iteration at the current speed; null at max
     stats: null, // cost of the iterations the latest update advanced, if any
     scattered: null, // { asked, planted } when the latest update answered a scatter
   };
@@ -35,7 +38,26 @@ export function connect(handlers) {
     for (const plant of message.plants) state.plants.set(plant.id, plant);
     state.tick = message.tick;
     state.clock = message.clock;
+    state.speed = message.speed;
+    state.tickMs = message.tick_ms;
     state.tips = message.tips;
+    state.skipStuck = message.skip_stuck;
+  }
+
+  // Sleeping tips are not resent, so they are kept here between updates.
+  // `woke` goes first: a tip can wake and fall asleep again within one update.
+  function applySleeping(message) {
+    for (const id of message.woke) state.sleeping.delete(id);
+    for (const tip of message.slept) state.sleeping.set(tip.id, tip);
+  }
+
+  // Tells the server an iteration is on screen. At max speed the server waits
+  // for this before the next iteration, so the page never falls behind. The
+  // animation frame runs just before the frame that shows the update, and the
+  // timeout runs once that frame has been painted. Hidden tabs get no frames,
+  // so a game at max speed waits while the tab is hidden.
+  function acknowledgeOnceDrawn(tick) {
+    requestAnimationFrame(() => setTimeout(() => send({ type: "ack", tick })));
   }
 
   // A plant with no cells left has been removed.
@@ -57,9 +79,9 @@ export function connect(handlers) {
         state.mode = message.mode;
         state.seed = message.seed;
         state.species = message.species;
-        state.tickMs = message.tick_ms;
         state.cells.clear();
         state.plants.clear();
+        state.sleeping = new Map(message.sleeping.map((tip) => [tip.id, tip]));
         message.cells.forEach(setCell);
         applyBoard(message);
         console.info(
@@ -73,7 +95,9 @@ export function connect(handlers) {
           // The whole board went at once; the cells are not listed.
           state.cells.clear();
           state.plants.clear();
+          state.sleeping.clear();
         }
+        applySleeping(message);
         for (const [q, r] of message.removed) state.cells.delete(hexKey(q, r));
         message.added.forEach(setCell);
         message.changed.forEach(setCell);
@@ -82,6 +106,7 @@ export function connect(handlers) {
         state.stats = message.stats;
         state.scattered = message.scattered;
         handlers.onUpdate?.(state, meta);
+        if (message.stats) acknowledgeOnceDrawn(message.tick);
         break;
       case "error":
         handlers.onError?.(message);
@@ -108,15 +133,20 @@ export function connect(handlers) {
     set measuring(value) {
       measuring = Boolean(value);
     },
-    // `settings` is left out for species that have none.
-    plant: (q, r, species, speed, settings) => send({ type: "plant", q, r, species, speed, settings }),
+    // `settings` is left out for species that have none, and `persistence`
+    // for each species' default.
+    plant: (q, r, species, speed, settings, persistence) =>
+      send({ type: "plant", q, r, species, speed, settings, persistence }),
     cut: (q, r) => send({ type: "cut", q, r }),
     slice: (hexes) => send({ type: "slice", hexes }),
     clear: () => send({ type: "clear" }),
     // `region` is { q, r, half_width, half_height }.
-    scatter: (count, region) => send({ type: "scatter", count, ...region }),
+    scatter: (count, region, persistence) => send({ type: "scatter", count, ...region, persistence }),
     pause: () => send({ type: "pause" }),
     resume: () => send({ type: "resume" }),
     step: (n) => send({ type: "step", n }),
+    skipStuck: (enabled) => send({ type: "skip_stuck", enabled }),
+    // `speed` is 1, 2, 5, 10, or "max".
+    speed: (speed) => send({ type: "speed", speed }),
   };
 }

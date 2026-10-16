@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 
 from .hex import Hex, neighbor
-from .species import CATALOG, SettingsError, Species
+from .species import CATALOG, SettingsError, Species, _roll
 
 ROOT = "root"
 SEGMENT = "segment"
@@ -57,6 +57,9 @@ class Plant:
     settings: dict | None = None
     # What the species remembers about the plant, such as which way it turns.
     state: dict = field(default_factory=dict)
+    # Percent chance that a blocked tip takes another path. Fixed at planting:
+    # the persistence given then, or else the species' default.
+    persistence: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -64,6 +67,7 @@ class Plant:
             "species": self.species_id,
             "speed": str(self.speed),
             "settings": self.settings,
+            "persistence": self.persistence,
         }
 
 
@@ -81,6 +85,10 @@ class Tip:
     decided: bool = False
     # Whether the tip ends once it has entered that hex.
     last: bool = False
+    # Whether the tip has rolled its persistence for that hex and lost, so it waits.
+    gave_up: bool = False
+    # While asleep: the hexes whose emptying wakes the tip. Empty while awake.
+    watching: tuple[Hex, ...] = ()
 
     def to_dict(self) -> dict:
         return {
@@ -114,6 +122,11 @@ class Changes:
         self.cleared = False
         # For a scatter: how many seeds were asked for and how many were planted.
         self.scattered: dict | None = None
+        # Tips that fell asleep, as they were then, and the ids of tips that
+        # left the sleeping set, by waking or by being removed. A client
+        # applies ``woke`` before ``slept``.
+        self._slept: dict[int, dict] = {}
+        self._woke: set[int] = set()
 
     def add_plant(self, plant: Plant) -> None:
         self._plants[plant.id] = plant.to_dict()
@@ -132,6 +145,16 @@ class Changes:
         self._changed.pop(hex, None)
         self._removed[hex] = None
 
+    def sleep(self, tip: Tip) -> None:
+        self._slept[tip.id] = tip.to_dict()
+
+    def wake(self, tip_id: int) -> None:
+        if tip_id in self._slept:
+            # It fell asleep within these changes, so no client knows it slept.
+            del self._slept[tip_id]
+        else:
+            self._woke.add(tip_id)
+
     def merge(self, other: Changes) -> None:
         if other.cleared:
             # Nothing recorded before a clear still matters.
@@ -139,6 +162,8 @@ class Changes:
             self._changed.clear()
             self._removed.clear()
             self._plants.clear()
+            self._slept.clear()
+            self._woke.clear()
             self.cleared = True
         if other.scattered is not None:
             self.scattered = other.scattered
@@ -152,6 +177,9 @@ class Changes:
             else:
                 self._changed[hex] = cell
         self._plants.update(other._plants)
+        for tip_id in other._woke:
+            self.wake(tip_id)
+        self._slept.update(other._slept)
         self.full = self.full or other.full
         self.visits += other.visits
 
@@ -172,6 +200,14 @@ class Changes:
     def removed(self) -> list[list[int]]:
         return [list(hex) for hex in self._removed]
 
+    @property
+    def slept(self) -> list[dict]:
+        return list(self._slept.values())
+
+    @property
+    def woke(self) -> list[int]:
+        return sorted(self._woke)
+
     def apply_to(self, cells: dict[Hex, dict]) -> None:
         """Replay onto a client-style cell map keyed by hex."""
         if self.cleared:
@@ -182,6 +218,15 @@ class Changes:
             cells[hex] = cell
         for hex, cell in self._changed.items():
             cells[hex] = cell
+
+
+def check_persistence(value: object) -> int | None:
+    """Check a persistence given at planting: None, or a whole percentage."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100:
+        raise SimError("bad_persistence", "Persistence must be a whole number from 0 to 100.")
+    return value
 
 
 def parse_speed(value: object) -> Fraction:
@@ -224,6 +269,14 @@ class World:
         self.tips: dict[int, Tip] = {}
         # Tips by the cell they sit on, kept in step with ``tips``.
         self._tips_on: dict[Hex, list[Tip]] = {}
+        # Whether stuck tips sleep. Either way the game is the same; sleeping
+        # tips just cost nothing until a removed cell could let them move.
+        self.skip_stuck = True
+        # ``tips`` split in two: tips that are worked on each iteration, and
+        # sleeping ones, with the hexes they wait on.
+        self._awake: dict[int, Tip] = {}
+        self._sleeping: dict[int, Tip] = {}
+        self._watchers: dict[Hex, set[int]] = {}
         self._next_plant_id = 1
         self._next_tip_id = 1
 
@@ -237,7 +290,18 @@ class World:
         return [cell.to_dict() for cell in self.cells.values()]
 
     def tips_snapshot(self) -> list[dict]:
+        """Every tip, awake or asleep."""
         return [tip.to_dict() for tip in self.tips.values()]
+
+    def awake_snapshot(self) -> list[dict]:
+        return [tip.to_dict() for tip in self._awake.values()]
+
+    def sleeping_snapshot(self) -> list[dict]:
+        return [tip.to_dict() for tip in self._sleeping.values()]
+
+    @property
+    def sleeping_count(self) -> int:
+        return len(self._sleeping)
 
     def plants_snapshot(self) -> list[dict]:
         return [plant.to_dict() for plant in self.plants.values()]
@@ -260,6 +324,7 @@ class World:
         owner: str,
         direction: int | None = None,
         settings: object = None,
+        persistence: object = None,
     ) -> Changes:
         species = self.catalog.get(species_id)
         if species is None:
@@ -269,6 +334,7 @@ class World:
             settings = species.validate(settings)
         except SettingsError as error:
             raise SimError("bad_settings", str(error)) from None
+        persistence = check_persistence(persistence)
         if hex in self.cells:
             raise SimError("occupied", "That hex is occupied.")
         if self.is_full:
@@ -277,6 +343,8 @@ class World:
             direction = self.rng.randrange(6)
 
         plant = Plant(self._next_plant_id, species_id, speed, owner, hex, settings, species.new_plant_state())
+        # Read after the plant exists, since a custom plant's default is in its settings.
+        plant.persistence = species.persistence_of(plant) if persistence is None else persistence
         self._next_plant_id += 1
         self.plants[plant.id] = plant
         root = Cell(hex, plant.id, ROOT, None)
@@ -293,7 +361,7 @@ class World:
         changes = Changes()
         self.tick += 1
 
-        for tip in self.tips.values():
+        for tip in self._awake.values():
             tip.progress += self.plants[tip.plant_id].speed
             if tip.decided:
                 # Still waiting to enter the hex it chose, behind a cell or a
@@ -306,9 +374,10 @@ class World:
         advanced = True
         while advanced:
             advanced = False
-            order = sorted(self.tips.values(), key=lambda tip: (tip.plant_id, tip.id))
+            order = sorted(self._awake.values(), key=lambda tip: (tip.plant_id, tip.id))
             for tip in order:
-                if tip.id in stalled or tip.progress < 1 or tip.id not in self.tips:
+                # A tip may have ended, or fallen asleep, earlier in this pass.
+                if tip.id in stalled or tip.progress < 1 or tip.id not in self._awake:
                     continue
                 changes.visits += 1
                 if self._advance(tip, changes):
@@ -330,13 +399,13 @@ class World:
         if cell.kind == ROOT:
             removed = self._descendants(hex) | {hex}
             self._remove_cells(removed, changes)
-            self._remove_tips_on(plant.id, removed)
+            self._remove_tips_on(plant.id, removed, changes)
             del self.plants[plant.id]
             return changes
 
         removed = self._descendants(hex)
         self._remove_cells(removed, changes)
-        self._remove_tips_on(plant.id, removed | {hex})
+        self._remove_tips_on(plant.id, removed | {hex}, changes)
         cell.kind = STUMP
         cell.children = []
         changes.change(cell)
@@ -358,11 +427,31 @@ class World:
         self.plants.clear()
         self.tips.clear()
         self._tips_on.clear()
+        self._awake.clear()
+        self._sleeping.clear()
+        self._watchers.clear()
         changes = Changes()
         changes.cleared = True
         return changes
 
-    def scatter(self, count: int, center: Hex, half_width: int, half_height: int, owner: str) -> Changes:
+    def set_skip_stuck(self, enabled: bool) -> Changes:
+        """Switch sleeping on or off. Off wakes every sleeping tip at once."""
+        changes = Changes()
+        self.skip_stuck = enabled
+        if not enabled:
+            for tip in list(self._sleeping.values()):
+                self._wake(tip, changes)
+        return changes
+
+    def scatter(
+        self,
+        count: int,
+        center: Hex,
+        half_width: int,
+        half_height: int,
+        owner: str,
+        persistence: object = None,
+    ) -> Changes:
         """Plant up to ``count`` seeds of random species on random empty hexes of a region.
 
         The region is a rectangle as seen on screen: ``half_height`` rows above
@@ -371,8 +460,11 @@ class World:
 
         Species are drawn independently from those that take no settings. If
         the region or the board has room for fewer seeds, as many as fit are
-        planted. Every choice comes from the board's random generator.
+        planted. Every choice comes from the board's random generator. A given
+        persistence goes to every seed; it is checked before anything is drawn,
+        so a bad one plants nothing and leaves the generator alone.
         """
+        persistence = check_persistence(persistence)
         free = []
         for dr in range(-half_height, half_height + 1):
             # |dq + dr / 2| <= half_width, kept in whole numbers.
@@ -391,7 +483,7 @@ class World:
         changes = Changes()
         for hex in chosen:
             species = self.rng.choice(presets)
-            changes.merge(self.plant_seed(hex, species.id, species.default_speed, owner))
+            changes.merge(self.plant_seed(hex, species.id, species.default_speed, owner, persistence=persistence))
         changes.scattered = {"asked": count, "planted": planted}
         return changes
 
@@ -417,6 +509,7 @@ class World:
         tip = Tip(self._next_tip_id, plant.id, cell, heading, state=state)
         self._next_tip_id += 1
         self.tips[tip.id] = tip
+        self._awake[tip.id] = tip
         self._tips_on.setdefault(cell, []).append(tip)
         return tip
 
@@ -443,9 +536,15 @@ class World:
 
         target = neighbor(tip.cell, tip.heading)
         if target in self.cells:
-            tip.blocked = True
-            tip.progress = ONE
-            return False
+            detour = None if self.is_full else self._detour(tip, plant)
+            if detour is None:
+                tip.blocked = True
+                tip.progress = ONE
+                if self.skip_stuck and not self.is_full:
+                    self._sleep(tip, target, changes)
+                return False
+            tip.heading = detour
+            target = neighbor(tip.cell, detour)
         if self.is_full:
             changes.full = True
             tip.progress = ONE
@@ -458,10 +557,69 @@ class World:
         tip.progress -= 1
         tip.blocked = False
         tip.decided = False
+        tip.gave_up = False
         changes.add(segment)
         if tip.last:
             self._drop_tip(tip)
         return True
+
+    def _detour(self, tip: Tip, plant: Plant) -> int | None:
+        """The heading of another path around a blocked tip's next hex, or None to wait.
+
+        The plant's persistence is rolled once per hex: a tip that lost the
+        roll waits for that hex without rolling again. A roll is only made
+        when a turn is free, so a tip with nowhere to go draws nothing. The
+        tip takes the gentlest free turn: 60 degrees, else 120, never back.
+        """
+        if tip.gave_up:
+            return None
+        tiers = [
+            [
+                heading
+                for heading in ((tip.heading - turn) % 6, (tip.heading + turn) % 6)
+                if neighbor(tip.cell, heading) not in self.cells
+            ]
+            for turn in (1, 2)
+        ]
+        sides = next((tier for tier in tiers if tier), None)
+        if sides is None:
+            return None
+        if not _roll(self, plant.persistence):
+            tip.gave_up = True
+            return None
+        return sides[0] if len(sides) == 1 else self.rng.choice(sides)
+
+    def _sleep(self, tip: Tip, target: Hex, changes: Changes) -> None:
+        """Put a stuck tip to sleep until one of the hexes it depends on is emptied.
+
+        Only a removed cell can let it move: its next hex freeing up, or, if
+        it has not lost its roll, one of its turns. Until then each visit
+        would change nothing and draw nothing, so it is skipped.
+        """
+        watching = [target]
+        if not tip.gave_up:
+            watching += [neighbor(tip.cell, (tip.heading + turn) % 6) for turn in (-1, 1, -2, 2)]
+        tip.watching = tuple(watching)
+        for hex in tip.watching:
+            self._watchers.setdefault(hex, set()).add(tip.id)
+        del self._awake[tip.id]
+        self._sleeping[tip.id] = tip
+        changes.sleep(tip)
+
+    def _unwatch(self, tip: Tip) -> None:
+        for hex in tip.watching:
+            watchers = self._watchers[hex]
+            watchers.discard(tip.id)
+            if not watchers:
+                del self._watchers[hex]
+        tip.watching = ()
+
+    def _wake(self, tip: Tip, changes: Changes) -> None:
+        """Wake a sleeping tip. It carries on as if it had waited awake."""
+        self._unwatch(tip)
+        del self._sleeping[tip.id]
+        self._awake[tip.id] = tip
+        changes.wake(tip.id)
 
     def _descendants(self, hex: Hex) -> set[Hex]:
         found: set[Hex] = set()
@@ -476,9 +634,18 @@ class World:
         for hex in hexes:
             del self.cells[hex]
             changes.remove(hex)
+            for tip_id in list(self._watchers.get(hex, ())):
+                self._wake(self._sleeping[tip_id], changes)
 
-    def _drop_tip(self, tip: Tip) -> None:
+    def _drop_tip(self, tip: Tip, changes: Changes | None = None) -> None:
         del self.tips[tip.id]
+        if tip.id in self._sleeping:
+            # Only a cut removes a sleeping tip, and a cut always reports it.
+            self._unwatch(tip)
+            del self._sleeping[tip.id]
+            changes.wake(tip.id)
+        else:
+            del self._awake[tip.id]
         here = self._tips_on[tip.cell]
         here.remove(tip)
         if not here:
@@ -492,8 +659,8 @@ class World:
         tip.cell = cell
         self._tips_on.setdefault(cell, []).append(tip)
 
-    def _remove_tips_on(self, plant_id: int, hexes: set[Hex]) -> None:
+    def _remove_tips_on(self, plant_id: int, hexes: set[Hex], changes: Changes) -> None:
         for hex in hexes:
             for tip in list(self._tips_on.get(hex, ())):
                 if tip.plant_id == plant_id:
-                    self._drop_tip(tip)
+                    self._drop_tip(tip, changes)

@@ -9,14 +9,16 @@ const TOAST_MS = 2600;
 const METRICS_REFRESH_MS = 250;
 const MENU_OPEN_KEY = "plantastic.menuOpen";
 const METRICS_KEY = "plantastic.metrics";
+const SKIP_STUCK_KEY = "plantastic.skipStuck";
 
 // Remembered yes/no choices. Storage can be unavailable, in which case the
 // choice simply lasts for the visit.
-function loadFlag(key) {
+function loadFlag(key, fallback = false) {
   try {
-    return localStorage.getItem(key) === "1";
+    const saved = localStorage.getItem(key);
+    return saved === null ? fallback : saved === "1";
   } catch {
-    return false;
+    return fallback;
   }
 }
 
@@ -46,6 +48,7 @@ const $ = (id) => document.getElementById(id);
 export function setupUi({ net, metrics, boardCounts, onHexSize, onMetrics, onScatter }) {
   const pauseButton = $("pause");
   const growButton = $("grow");
+  const speedButtons = [...document.querySelectorAll("#speeds button")];
   const stepCount = $("step-count");
   const scatterCount = $("scatter-count");
   const scatterButton = $("scatter");
@@ -53,6 +56,8 @@ export function setupUi({ net, metrics, boardCounts, onHexSize, onMetrics, onSca
   const hexSize = $("hex-size");
   const species = $("species");
   const speed = $("speed");
+  const persistence = $("persistence");
+  const persistenceOverride = $("persistence-override");
   const toolButtons = { seed: $("tool-seed"), scissors: $("tool-scissors"), mower: $("tool-mower") };
   const toastBox = $("toast");
   const settingsBox = $("settings");
@@ -167,8 +172,12 @@ export function setupUi({ net, metrics, boardCounts, onHexSize, onMetrics, onSca
   function describePlant(plant) {
     const entry = net.state.species.find((candidate) => candidate.id === plant.species);
     const parts = [`Plant ${plant.id}: ${entry ? entry.name : plant.species}`, `speed ${plant.speed}`];
+    // The persistence the plant really has, which may not be its species' default.
+    // A custom plant's persistence setting is left out so the value shows once.
+    if (plant.persistence != null) parts.push(`persistence ${plant.persistence}%`);
     if (entry && plant.settings) {
-      parts.push(...entry.settings.map((setting) => settingText(setting, plant.settings[setting.id])));
+      const shown = entry.settings.filter((setting) => setting.id !== "persistence");
+      parts.push(...shown.map((setting) => settingText(setting, plant.settings[setting.id])));
     }
     return parts.join(" \u00b7 ");
   }
@@ -188,8 +197,27 @@ export function setupUi({ net, metrics, boardCounts, onHexSize, onMetrics, onSca
     stepCount.disabled = !connected || running;
     scatterCount.disabled = scatterButton.disabled = clearButton.disabled = !connected;
     growButton.title = running ? "Pause the game to grow by a set number of iterations." : "";
+    for (const button of speedButtons) {
+      button.disabled = !connected;
+      button.setAttribute("aria-checked", String(button.dataset.speed === String(net.state.speed)));
+    }
+    skipStuckToggle.disabled = !connected;
+    skipStuckToggle.checked = connected ? net.state.skipStuck : skipStuckWanted;
+    // Persistence applies to Random seeds too, so it stays usable with any tool.
+    persistenceOverride.disabled = !connected;
+    persistence.disabled = !connected || !persistenceOverride.checked;
     $("tick").textContent = tick;
     $("cell-count").textContent = cells.size;
+  }
+
+  persistenceOverride.addEventListener("change", sync);
+
+  // The highlight moves only once the server reports the new speed.
+  for (const button of speedButtons) {
+    button.addEventListener("click", () => {
+      const { speed } = button.dataset;
+      net.speed(speed === "max" ? speed : Number(speed));
+    });
   }
 
   pauseButton.addEventListener("click", () => {
@@ -232,6 +260,9 @@ export function setupUi({ net, metrics, boardCounts, onHexSize, onMetrics, onSca
   const menuToggle = $("menu-toggle");
   const menuBody = $("menu-body");
   const metricsToggle = $("metrics-toggle");
+  const skipStuckToggle = $("skip-stuck-toggle");
+  // What this browser asks rooms for. The switch itself shows what the room reports.
+  let skipStuckWanted = loadFlag(SKIP_STUCK_KEY, true);
   const metricsPanel = $("metrics");
   const graphsPanel = $("graphs");
   const graphs = [
@@ -251,13 +282,17 @@ export function setupUi({ net, metrics, boardCounts, onHexSize, onMetrics, onSca
     const counts = boardCounts();
     const none = "\u2013";
     $("m-fps").textContent = now.fps === null ? none : whole(now.fps);
+    // At max speed no time is set aside per iteration, so there is no share.
     $("m-iteration").textContent =
       now.iterationMs === null
         ? none
-        : `${millis(now.iterationMs)} (${percent(now.budgetPercent)} of ${whole(now.tickMs)} ms)`;
+        : now.tickMs === null
+          ? millis(now.iterationMs)
+          : `${millis(now.iterationMs)} (${percent(now.budgetPercent)} of ${whole(now.tickMs)} ms)`;
     $("m-recent").textContent = now.recentMs === null ? none : millis(now.recentMs);
     $("m-visits").textContent = now.visits === null ? none : whole(now.visits);
-    $("m-tips").textContent = `${whole(counts.tips)} (${whole(counts.waiting)} waiting)`;
+    $("m-tips").textContent =
+      `${whole(counts.tips)} (${whole(counts.waiting)} waiting, ${whole(counts.asleep)} asleep)`;
     $("m-cells").textContent = whole(counts.cells);
     $("m-plants").textContent = whole(counts.plants);
     $("m-update").textContent =
@@ -334,6 +369,11 @@ export function setupUi({ net, metrics, boardCounts, onHexSize, onMetrics, onSca
 
   menuToggle.addEventListener("click", () => setMenuOpen(menuBody.hidden));
   metricsToggle.addEventListener("change", () => setMetrics(metricsToggle.checked));
+  skipStuckToggle.addEventListener("change", () => {
+    skipStuckWanted = skipStuckToggle.checked;
+    saveFlag(SKIP_STUCK_KEY, skipStuckWanted);
+    net.skipStuck(skipStuckWanted);
+  });
   setMenuOpen(loadFlag(MENU_OPEN_KEY));
   setMetrics(loadFlag(METRICS_KEY));
 
@@ -363,6 +403,22 @@ export function setupUi({ net, metrics, boardCounts, onHexSize, onMetrics, onSca
     },
     get speed() {
       return speed.value.trim();
+    },
+    // Whether this browser wants rooms to skip stuck tips.
+    get skipStuck() {
+      return skipStuckWanted;
+    },
+    // The persistence new seeds would be sent with: a number while Override is
+    // ticked, or undefined for each species' default. Null when the field does
+    // not hold a whole number, after telling the player so; send nothing then.
+    get persistence() {
+      if (!persistenceOverride.checked) return undefined;
+      const value = Number(persistence.value);
+      if (persistence.value.trim() === "" || !Number.isInteger(value)) {
+        toast("Persistence must be a whole number from 0 to 100.");
+        return null;
+      }
+      return value;
     },
     // The settings a seed planted now would carry, or undefined for a species without any.
     get settings() {

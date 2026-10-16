@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from plantastic.server.app import create_app
+from plantastic.sim.hex import neighbor
 
 
 class ClientBoard:
@@ -11,6 +12,8 @@ class ClientBoard:
         self.cells = {}
         self.plants = {}
         self.tips = []
+        self.sleeping = {}  # tip id -> tip, kept between updates as the browser does
+        self.skip_stuck = None
         self.tick = 0
         self.clock = None
         self.errors = []
@@ -23,9 +26,15 @@ class ClientBoard:
         message = self.websocket.receive_json()
         if message["type"] == "welcome":
             self.cells = {(cell["q"], cell["r"]): cell for cell in message["cells"]}
+            self.sleeping = {tip["id"]: tip for tip in message["sleeping"]}
         elif message["type"] == "update":
             if message["cleared"]:
                 self.cells.clear()
+                self.sleeping.clear()
+            for tip_id in message["woke"]:
+                self.sleeping.pop(tip_id, None)
+            for tip in message["slept"]:
+                self.sleeping[tip["id"]] = tip
             for q, r in message["removed"]:
                 self.cells.pop((q, r), None)
             for cell in message["added"] + message["changed"]:
@@ -41,6 +50,7 @@ class ClientBoard:
             alive = {cell["plant"] for cell in self.cells.values()}
             self.plants = {id: details for id, details in self.plants.items() if id in alive}
             self.tips = message["tips"]
+            self.skip_stuck = message["skip_stuck"]
             self.tick = message["tick"]
             self.clock = message["clock"]
         return message
@@ -52,9 +62,12 @@ class ClientBoard:
     def matches(self, room) -> bool:
         board = room.board
         server_cells = {(cell["q"], cell["r"]): cell for cell in board.cells_snapshot()}
+        mine = sorted([*self.tips, *self.sleeping.values()], key=lambda tip: tip["id"])
+        theirs = sorted(board.tips_snapshot(), key=lambda tip: tip["id"])
         return (
             self.cells == server_cells
-            and self.tips == board.tips_snapshot()
+            and mine == theirs
+            and not (set(self.sleeping) & {tip["id"] for tip in self.tips})
             and self.tick == board.tick
             and self.clock == room.clock
         )
@@ -146,6 +159,7 @@ def test_client_knows_the_details_of_exactly_the_plants_on_its_board():
         "calm_min": 0,
         "calm_max": 5,
         "turn_chance": 20,
+        "persistence": 40,
         "cut_response": "multiply",
     }
     app = create_app(tick_interval=3600, frontend_dir=None)
@@ -153,7 +167,7 @@ def test_client_knows_the_details_of_exactly_the_plants_on_its_board():
         client = ClientBoard(websocket)
         room = only_room(app)
         custom = next(species for species in client.welcome["species"] if species["id"] == "custom")
-        assert len(custom["settings"]) == 7
+        assert len(custom["settings"]) == 8
         assert client.plants == {}
 
         client.send(type="pause")
@@ -161,8 +175,8 @@ def test_client_knows_the_details_of_exactly_the_plants_on_its_board():
         client.send(type="plant", q=0, r=30, species="custom", speed="1", settings=settings)
         client.send(type="step", n=8)
         assert client.plants == {
-            1: {"id": 1, "species": "straight-vine", "speed": "1/2", "settings": None},
-            2: {"id": 2, "species": "custom", "speed": "1", "settings": settings},
+            1: {"id": 1, "species": "straight-vine", "speed": "1/2", "settings": None, "persistence": 0},
+            2: {"id": 2, "species": "custom", "speed": "1", "settings": settings, "persistence": 40},
         }
         assert client.matches(room)
 
@@ -272,3 +286,73 @@ def test_frontend_files_are_always_revalidated():
     unchanged = client.get("/js/main.js", headers={"If-None-Match": script.headers["etag"]})
     assert unchanged.status_code == 304
     assert unchanged.headers["cache-control"] == "no-cache"
+
+
+def test_max_speed_is_paced_by_the_clients_acks():
+    app = create_app(tick_interval=3600, frontend_dir=None)
+    with TestClient(app).websocket_connect("/ws") as websocket:
+        client = ClientBoard(websocket)
+        room = only_room(app)
+        client.send(type="plant", q=0, r=0, species="straight-vine", speed="1")
+        assert client.send(type="speed", speed="max")["speed"] == "max"
+
+        ticks = []
+        for index in range(20):
+            message = client.receive()
+            assert message["type"] == "update" and message["stats"]["iterations"] == 1
+            ticks.append(message["tick"])
+            if index == 10:
+                # A command while the clock waits: its update comes before the next tick.
+                planted = client.send(type="plant", q=60, r=-60, species="straight-vine", speed="1")
+                assert planted["stats"] is None and planted["tick"] == message["tick"]
+            websocket.send_json({"type": "ack", "tick": message["tick"]})
+
+        assert ticks == list(range(1, 21))
+        assert len(client.plants) == 2
+        websocket.send_json({"type": "pause"})
+        while client.clock != "paused":
+            client.receive()
+        assert client.matches(room)
+
+
+def test_client_keeps_sleeping_tips_through_cuts_and_switching():
+    app = create_app(tick_interval=3600, frontend_dir=None)
+    with TestClient(app).websocket_connect("/ws") as websocket:
+        client = ClientBoard(websocket)
+        room = only_room(app)
+        assert client.skip_stuck is True
+        region = {"q": 0, "r": 0, "half_width": 6, "half_height": 5}
+
+        client.send(type="pause")
+        client.send(type="scatter", count=40, **region)
+        client.send(type="scatter", count=30, persistence=100, **region)
+        for _ in range(12):
+            client.send(type="step", n=5)
+            assert client.matches(room)
+        assert len(client.sleeping) > 5
+
+        # Remove the plant in front of a sleeping tip, by cutting its root, so
+        # the tip wakes. (Cutting any other cell would leave a stump in the way.)
+        board = room.board
+        tip, blocker = next(
+            (tip, board.cells[neighbor(tip.cell, tip.heading)].plant_id)
+            for tip in board._sleeping.values()
+            if board.cells[neighbor(tip.cell, tip.heading)].plant_id != tip.plant_id
+        )
+        root = board.plants[blocker].root
+        client.send(type="cut", q=root[0], r=root[1])
+        assert tip.id not in client.sleeping
+        assert client.matches(room)
+
+        assert client.send(type="skip_stuck", enabled=False)["skip_stuck"] is False
+        assert client.sleeping == {} and client.matches(room)
+        for _ in range(3):
+            client.send(type="step", n=5)
+            assert client.matches(room) and client.sleeping == {}
+
+        assert client.send(type="skip_stuck", enabled=True)["skip_stuck"] is True
+        client.send(type="step", n=5)
+        assert client.sleeping and client.matches(room)
+
+        client.send(type="clear")
+        assert client.sleeping == {} and client.matches(room)

@@ -55,7 +55,19 @@ def test_welcome_describes_the_room():
         "id": "straight-vine",
         "name": "Straight vine",
         "default_speed": "1",
+        "persistence": 0,
         "settings": [],
+    }
+    persistence = {species["id"]: species["persistence"] for species in welcome["species"]}
+    assert persistence == {
+        "straight-vine": 0,
+        "zigzag": 30,
+        "spiral": 30,
+        "fern": 0,
+        "wanderer": 60,
+        "hydra": 80,
+        "burst": 30,
+        "custom": None,
     }
 
 
@@ -72,7 +84,7 @@ def test_plant_records_the_owner_and_returns_an_update():
 
     assert update["type"] == "update"
     assert update["added"] == [{"q": 2, "r": 3, "plant": 1, "kind": "root", "parent": None}]
-    assert update["plants"] == [{"id": 1, "species": "straight-vine", "speed": "1", "settings": None}]
+    assert update["plants"] == [{"id": 1, "species": "straight-vine", "speed": "1", "settings": None, "persistence": 0}]
     assert len(update["tips"]) == 1
     assert room.board.plants[1].owner == PLAYER
 
@@ -266,6 +278,7 @@ CUSTOM_SETTINGS = {
     "calm_min": 1,
     "calm_max": 8,
     "turn_chance": 15,
+    "persistence": 70,
     "cut_response": "regrow",
 }
 
@@ -291,7 +304,9 @@ def test_custom_seed_is_planted_with_its_settings():
     room = paused_room()
     (update,) = room.handle(PLAYER, plant_custom(0, 0))
 
-    assert update["plants"] == [{"id": 1, "species": "custom", "speed": "1", "settings": CUSTOM_SETTINGS}]
+    assert update["plants"] == [
+        {"id": 1, "species": "custom", "speed": "1", "settings": CUSTOM_SETTINGS, "persistence": 70}
+    ]
     assert room.board.plants[1].settings == CUSTOM_SETTINGS
     assert room.welcome()["plants"] == update["plants"]
 
@@ -465,3 +480,255 @@ def test_mode_can_forbid_clearing_and_scattering():
     room = Room(LookOnlyMode(), PLAYER, seed=1)
     assert rejected(room, command(type="clear")) == "not_permitted"
     assert rejected(room, scatter(5)) == "not_permitted"
+
+
+# -- game speed -----------------------------------------------------------------
+
+
+def set_speed(room: Room, speed) -> dict:
+    (update,) = room.handle(PLAYER, command(type="speed", speed=speed))
+    return update
+
+
+def ack(room: Room, tick: int) -> None:
+    assert room.handle(PLAYER, command(type="ack", tick=tick)) == []
+
+
+def test_speed_starts_at_one_and_reports_the_time_available():
+    room = Room(SandboxMode(), PLAYER, seed=1)
+    welcome = room.welcome()
+    assert welcome["speed"] == 1 and welcome["tick_ms"] == 500
+
+    update = set_speed(room, 10)
+    assert update["speed"] == 10 and update["tick_ms"] == 50
+    assert update["stats"] is None
+    update = set_speed(room, "max")
+    assert update["speed"] == "max" and update["tick_ms"] is None
+    assert room.welcome()["speed"] == "max"
+
+
+@pytest.mark.parametrize("speed", [3, 0, "fast", True, 2.5])
+def test_invalid_speed_is_rejected(speed):
+    room = Room(SandboxMode(), PLAYER, seed=1)
+    set_speed(room, 5)
+    assert rejected(room, command(type="speed", speed=speed)) == "bad_game_speed"
+    assert room.speed == 5
+
+
+def test_setting_the_speed_while_paused_neither_advances_nor_resumes():
+    room = paused_room()
+    room.handle(PLAYER, plant(0, 0))
+    update = set_speed(room, 10)
+    assert update["clock"] == "paused" and update["tick"] == 0
+    assert not room.running and room.board.tick == 0
+
+
+def test_speed_survives_pause_and_resume():
+    room = Room(SandboxMode(), PLAYER, seed=1)
+    set_speed(room, 5)
+    (paused,) = room.handle(PLAYER, command(type="pause"))
+    (resumed,) = room.handle(PLAYER, command(type="resume"))
+    assert paused["speed"] == resumed["speed"] == 5
+
+
+def test_ack_sends_nothing_back_at_any_speed():
+    room = paused_room()
+    ack(room, 0)
+    set_speed(room, "max")
+    ack(room, 40)
+
+
+def ticks_in(speed, seconds: float = 0.4) -> int:
+    room = Room(SandboxMode(), PLAYER, seed=1, tick_interval=0.05)
+    set_speed(room, speed)
+    room.handle(PLAYER, plant(0, 0))
+
+    async def script():
+        await asyncio.sleep(seconds)
+
+    run_clock_for(room, script)
+    return room.board.tick
+
+
+def test_higher_speed_ticks_faster():
+    slow, fast = ticks_in(1), ticks_in(5)
+    assert slow >= 4
+    assert fast >= 2 * slow
+
+
+def max_room(**kwargs) -> Room:
+    room = Room(SandboxMode(), PLAYER, seed=1, tick_interval=3600, **kwargs)
+    room.handle(PLAYER, plant(0, 0))
+    set_speed(room, "max")
+    return room
+
+
+def test_max_without_acks_sends_exactly_one_tick():
+    room = max_room()
+
+    async def script():
+        await asyncio.sleep(0.15)
+
+    sent = run_clock_for(room, script)
+    assert [message["tick"] for message in sent] == [1]
+
+
+def test_each_ack_of_the_latest_tick_releases_exactly_one_more():
+    room = max_room()
+    seen = []
+
+    async def script():
+        for _ in range(5):
+            await asyncio.sleep(0.03)
+            seen.append(room.board.tick)
+            ack(room, room.board.tick)
+        await asyncio.sleep(0.03)
+        seen.append(room.board.tick)
+
+    sent = run_clock_for(room, script)
+    assert seen == [1, 2, 3, 4, 5, 6]
+    assert [message["tick"] for message in sent] == [1, 2, 3, 4, 5, 6]
+
+
+def test_stale_ack_releases_nothing():
+    room = max_room()
+
+    async def script():
+        await asyncio.sleep(0.03)
+        ack(room, 1)
+        await asyncio.sleep(0.03)
+        assert room.board.tick == 2
+        ack(room, 1)  # the client is behind: it has not drawn iteration 2
+        ack(room, 0)
+        await asyncio.sleep(0.05)
+
+    run_clock_for(room, script)
+    assert room.board.tick == 2
+
+
+def test_leaving_max_while_waiting_resumes_ticking():
+    room = max_room()
+    room.tick_interval = 0.02
+
+    async def script():
+        await asyncio.sleep(0.05)
+        assert room.board.tick == 1
+        set_speed(room, 2)
+        await asyncio.sleep(0.15)
+
+    run_clock_for(room, script)
+    assert room.board.tick >= 4
+
+
+def test_pausing_at_max_stops_and_resuming_ticks_at_once():
+    room = max_room()
+    ticks = {}
+
+    async def script():
+        await asyncio.sleep(0.03)
+        room.handle(PLAYER, command(type="pause"))
+        ack(room, 1)
+        await asyncio.sleep(0.05)
+        ticks["paused"] = room.board.tick
+        room.handle(PLAYER, command(type="resume"))
+        await asyncio.sleep(0.03)
+        ticks["resumed"] = room.board.tick
+
+    run_clock_for(room, script)
+    assert ticks == {"paused": 1, "resumed": 2}
+
+
+def test_full_board_at_max_pauses_and_notifies():
+    room = max_room(max_cells=4)
+
+    async def script():
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+            ack(room, room.board.tick)
+
+    sent = run_clock_for(room, script)
+    assert not room.running and room.speed == "max"
+    assert sent[-1]["type"] == "notice" and sent[-1]["code"] == "board_full"
+    assert room.board.tick == 4
+
+
+def test_a_new_speed_cuts_short_a_wait_at_the_old_one():
+    room = Room(SandboxMode(), PLAYER, seed=1, tick_interval=3600)
+    room.handle(PLAYER, plant(0, 0))
+
+    async def script():
+        await asyncio.sleep(0.03)  # the clock is now waiting an hour at 1x
+        set_speed(room, "max")
+        await asyncio.sleep(0.03)
+
+    sent = run_clock_for(room, script)
+    assert [message["tick"] for message in sent if message["type"] == "update"] == [1]
+
+
+# -- persistence override ---------------------------------------------------------
+
+
+def test_plant_with_a_persistence_is_reported_with_it():
+    room = paused_room()
+    (update,) = room.handle(PLAYER, command(type="plant", q=0, r=0, species="straight-vine", speed="1", persistence=90))
+    assert update["plants"][0]["persistence"] == 90
+    (update,) = room.handle(PLAYER, plant(0, 9))  # left out: the species default
+    assert update["plants"][0]["persistence"] == 0
+
+
+def test_scatter_with_a_persistence_reports_it_on_every_plant():
+    room = paused_room()
+    region = {"q": 0, "r": 0, "half_width": 10, "half_height": 10}
+    (update,) = room.handle(PLAYER, command(type="scatter", count=10, persistence=40, **region))
+    assert len(update["plants"]) == 10
+    assert {details["persistence"] for details in update["plants"]} == {40}
+
+
+def test_persistence_out_of_range_is_rejected():
+    room = paused_room()
+    region = {"q": 0, "r": 0, "half_width": 10, "half_height": 10}
+    hydra = command(type="plant", q=0, r=0, species="hydra", speed="1", persistence=150)
+    assert rejected(room, hydra) == "bad_persistence"
+    assert rejected(room, command(type="scatter", count=5, persistence=150, **region)) == "bad_persistence"
+    assert not room.board.plants
+
+
+# -- skipping stuck tips ----------------------------------------------------------
+
+
+def test_welcome_says_skipping_is_on_and_lists_sleeping_tips():
+    room = Room(SandboxMode(), PLAYER, seed=1)
+    welcome = room.welcome()
+    assert welcome["skip_stuck"] is True and welcome["sleeping"] == []
+
+
+def test_a_tip_that_falls_asleep_is_sent_once():
+    room = Room(SandboxMode(), PLAYER, seed=1, tick_interval=3600)
+    room.handle(PLAYER, command(type="pause"))
+    room.board.plant_seed((0, 0), "straight-vine", "1", PLAYER, direction=0)
+    room.board.plant_seed((3, 0), "straight-vine", "1/1000", PLAYER, direction=0)
+    vine = next(tip.id for tip in room.board.tips.values() if tip.plant_id == 1)
+
+    updates = [room.handle(PLAYER, command(type="step", n=1))[0] for _ in range(6)]
+    slept_in = [index for index, update in enumerate(updates) if any(tip["id"] == vine for tip in update["slept"])]
+    assert len(slept_in) == 1
+    for update in updates[slept_in[0]:]:
+        assert all(tip["id"] != vine for tip in update["tips"])
+    assert room.welcome()["sleeping"][0]["id"] == vine
+
+
+def test_switching_off_wakes_sleeping_tips_in_one_update():
+    room = Room(SandboxMode(), PLAYER, seed=1, tick_interval=3600)
+    room.handle(PLAYER, command(type="pause"))
+    room.board.plant_seed((0, 0), "straight-vine", "1", PLAYER, direction=0)
+    room.board.plant_seed((3, 0), "straight-vine", "1/1000", PLAYER, direction=0)
+    vine = next(tip.id for tip in room.board.tips.values() if tip.plant_id == 1)
+    room.handle(PLAYER, command(type="step", n=5))
+    assert room.board.sleeping_count == 1
+
+    (update,) = room.handle(PLAYER, command(type="skip_stuck", enabled=False))
+    assert update["skip_stuck"] is False and update["stats"] is None and update["tick"] == 5
+    assert update["woke"] == [vine]
+    assert any(tip["id"] == vine for tip in update["tips"])
+    (update,) = room.handle(PLAYER, command(type="skip_stuck", enabled=True))
+    assert update["skip_stuck"] is True and update["woke"] == [] and update["slept"] == []

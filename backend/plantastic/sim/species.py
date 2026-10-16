@@ -145,6 +145,8 @@ class Species:
     id: str
     name: str
     default_speed = Fraction(1)
+    # Percent chance that a blocked tip takes another path around the obstacle.
+    persistence = 0
     settings: tuple[Setting, ...] = ()
 
     def validate(self, raw: object) -> dict | None:
@@ -168,6 +170,10 @@ class Species:
     def new_plant_state(self) -> dict:
         """What the species remembers about a whole plant."""
         return {}
+
+    def persistence_of(self, plant: Plant) -> int:
+        """The plant's percent chance of taking another path when a tip is blocked."""
+        return self.persistence
 
     def new_tip_state(self, plant: Plant, heading: int) -> dict:
         """What a new tip remembers: the seed's tip, and any shoot or sprout without its own state."""
@@ -208,6 +214,7 @@ class _Handed(Species):
 class Zigzag(_Handed):
     id = "zigzag"
     name = "Zigzag"
+    persistence = 30
 
     def new_tip_state(self, plant: Plant, heading: int) -> dict:
         return {"base": heading, "hand": plant.state["hand"], "step": 0}
@@ -221,6 +228,7 @@ class Zigzag(_Handed):
 class Spiral(_Handed):
     id = "spiral"
     name = "Spiral"
+    persistence = 30
 
     def new_tip_state(self, plant: Plant, heading: int) -> dict:
         return {"hand": plant.state["hand"], "run": 1, "left": 1, "turns": 0}
@@ -268,6 +276,7 @@ class Fern(Species):
 class Wanderer(Species):
     id = "wanderer"
     name = "Wanderer"
+    persistence = 60
 
     TURN_CHANCE = 20  # percent
 
@@ -284,6 +293,7 @@ class Wanderer(Species):
 class Hydra(Species):
     id = "hydra"
     name = "Hydra"
+    persistence = 80
 
     def on_cut(self, plant: Plant, stump: Hex, world: World) -> list[Sprout]:
         return multiply(plant, stump, world)
@@ -292,6 +302,7 @@ class Hydra(Species):
 class Burst(Species):
     id = "burst"
     name = "Burst"
+    persistence = 30
 
     FAN_EVERY = 4
 
@@ -330,6 +341,7 @@ class Custom(Species):
         Setting("calm_min", "Calm stretch min", "int", 0, 1000, 2),
         Setting("calm_max", "Calm stretch max", "optional_int", 0, 1000, None),
         Setting("turn_chance", "Turn chance %", "percent", 0, 100, 10),
+        Setting("persistence", "Persistence %", "percent", 0, 100, 50),
         Setting(
             "cut_response",
             "When cut",
@@ -346,6 +358,9 @@ class Custom(Species):
         if settings["calm_max"] is not None and settings["calm_max"] < settings["calm_min"]:
             raise SettingsError("Calm stretch max cannot be below calm stretch min.")
         return settings
+
+    def persistence_of(self, plant: Plant) -> int:
+        return plant.settings["persistence"]
 
     def new_tip_state(self, plant: Plant, heading: int) -> dict:
         return {"calm": 0}  # hexes entered since the last branch or turn

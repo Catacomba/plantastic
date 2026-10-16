@@ -9,6 +9,8 @@ from collections.abc import Awaitable, Callable
 
 from ..sim.world import DEFAULT_MAX_CELLS, Changes, SimError, World
 from .protocol import (
+    MAX_SPEED,
+    AckCommand,
     ClearCommand,
     CutCommand,
     GameError,
@@ -16,8 +18,11 @@ from .protocol import (
     PlantCommand,
     ResumeCommand,
     ScatterCommand,
+    SkipStuckCommand,
     SliceCommand,
+    SpeedCommand,
     StepCommand,
+    game_speed,
     notice_message,
 )
 
@@ -64,6 +69,16 @@ class Room:
         self._resumed = asyncio.Event()
         if self.running:
             self._resumed.set()
+        # 1, 2, 5, or 10 times the base rate, or "max": as fast as the client draws.
+        self.speed: int | str = 1
+        # At max: the iteration of the clock update the client has yet to
+        # acknowledge, or None when nothing is waiting, and the latest acknowledged.
+        self._sent_tick: int | None = None
+        self._acked_tick = -1
+        # Set whenever something the waiting clock cares about changes.
+        self._wake = asyncio.Event()
+        # Set when the speed changes, cutting short a wait at the old speed.
+        self._retimed = asyncio.Event()
 
     @property
     def board(self) -> World:
@@ -72,6 +87,13 @@ class Room:
     @property
     def clock(self) -> str:
         return "running" if self.running else "paused"
+
+    @property
+    def tick_ms(self) -> int | None:
+        """Time available for one iteration at the current speed, or None at max."""
+        if self.speed == MAX_SPEED:
+            return None
+        return round(self.tick_interval * 1000 / self.speed)
 
     # -- messages ----------------------------------------------------------
 
@@ -87,16 +109,22 @@ class Room:
                     "id": species.id,
                     "name": species.name,
                     "default_speed": str(species.default_speed),
+                    # A species with settings takes its persistence from them, plant by plant.
+                    "persistence": None if species.settings else species.persistence,
                     "settings": [setting.describe() for setting in species.settings],
                 }
                 for species in board.catalog.values()
             ],
             "clock": self.clock,
             "tick": board.tick,
-            # Time available for one iteration while the clock runs.
-            "tick_ms": round(self.tick_interval * 1000),
+            "speed": self.speed,
+            # Time available for one iteration while the clock runs, or None at max.
+            "tick_ms": self.tick_ms,
             "cells": board.cells_snapshot(),
-            "tips": board.tips_snapshot(),
+            # Awake tips here and sleeping ones apart: together they are every tip.
+            "tips": board.awake_snapshot(),
+            "sleeping": board.sleeping_snapshot(),
+            "skip_stuck": board.skip_stuck,
             "plants": board.plants_snapshot(),
         }
 
@@ -109,8 +137,16 @@ class Room:
             "removed": changes.removed,
             "changed": changes.changed,
             "plants": changes.plants,
-            "tips": board.tips_snapshot(),
+            # Every awake tip. Sleeping tips are sent once, when they fall
+            # asleep; ``woke`` names those that left the sleeping set, by waking
+            # or by being removed. Apply ``woke`` before ``slept``.
+            "tips": board.awake_snapshot(),
+            "slept": changes.slept,
+            "woke": changes.woke,
+            "skip_stuck": board.skip_stuck,
             "clock": self.clock,
+            "speed": self.speed,
+            "tick_ms": self.tick_ms,
             # True when the whole board was emptied; the cells are not listed.
             "cleared": changes.cleared,
             # For a scatter, how many seeds were asked for and planted; otherwise None.
@@ -162,6 +198,7 @@ class Room:
                     command.speed,
                     player,
                     settings=command.settings,
+                    persistence=command.persistence,
                 )
                 return [self._update(changes)]
             if isinstance(command, CutCommand):
@@ -172,7 +209,12 @@ class Room:
                 return [self._update(self.board.clear())]
             if isinstance(command, ScatterCommand):
                 changes = self.board.scatter(
-                    command.count, (command.q, command.r), command.half_width, command.half_height, player
+                    command.count,
+                    (command.q, command.r),
+                    command.half_width,
+                    command.half_height,
+                    player,
+                    persistence=command.persistence,
                 )
                 return [self._update(changes)]
         except SimError as error:
@@ -185,6 +227,18 @@ class Room:
             return [self._update(Changes())]
         if isinstance(command, StepCommand):
             return self._step(command.n)
+        if isinstance(command, SpeedCommand):
+            self.speed = game_speed(command.speed)
+            self._sent_tick = None
+            self._wake.set()
+            self._retimed.set()
+            return [self._update(Changes())]
+        if isinstance(command, SkipStuckCommand):
+            return [self._update(self.board.set_skip_stuck(command.enabled))]
+        if isinstance(command, AckCommand):
+            self._acked_tick = max(self._acked_tick, command.tick)
+            self._wake.set()
+            return []
         raise GameError("bad_message", "Unknown command.")
 
     def _step(self, count) -> list[dict]:
@@ -202,17 +256,45 @@ class Room:
 
     def _set_running(self, running: bool) -> None:
         self.running = running
+        self._sent_tick = None
+        self._wake.set()
         if running:
             self._resumed.set()
         else:
             self._resumed.clear()
 
+    def _awaiting_ack(self) -> bool:
+        """Whether the clock is at max and its latest update is not yet acknowledged."""
+        if not self.running or self.speed != MAX_SPEED or self._sent_tick is None:
+            return False
+        return self._acked_tick < self._sent_tick
+
     async def run_clock(self, broadcast: Broadcast) -> None:
-        """Tick at the room's interval while running. Runs until cancelled."""
+        """Tick while running, paced by the speed. Runs until cancelled.
+
+        At max there is no interval: after each update the clock waits for the
+        client to acknowledge drawing it, then ticks again at once. Pausing,
+        resuming, and changing speed all stop that wait.
+        """
         while True:
             await self._resumed.wait()
-            await asyncio.sleep(self.tick_interval)
-            if not self.running:
-                continue
-            for message in self.tick():
+            if self.speed == MAX_SPEED:
+                while self._awaiting_ack():
+                    self._wake.clear()
+                    await self._wake.wait()
+                if not self.running or self.speed != MAX_SPEED:
+                    continue
+            else:
+                # A new speed starts a new wait, so it takes effect at once.
+                self._retimed.clear()
+                try:
+                    await asyncio.wait_for(self._retimed.wait(), self.tick_interval / self.speed)
+                    continue
+                except TimeoutError:
+                    pass
+                if not self.running:
+                    continue
+            messages = self.tick()
+            self._sent_tick = self.board.tick if self.speed == MAX_SPEED and self.running else None
+            for message in messages:
                 await broadcast(message)

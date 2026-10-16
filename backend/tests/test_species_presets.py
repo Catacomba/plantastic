@@ -1,7 +1,7 @@
 """Growth patterns and cut responses of the six preset species."""
 
 from plantastic.sim.hex import DIRECTIONS, direction_between, neighbor, turn_left, turn_right
-from plantastic.sim.species import CATALOG
+from plantastic.sim.species import CATALOG, Burst, Hydra, Wanderer, Zigzag
 from plantastic.sim.world import ROOT, SEGMENT, STUMP, World
 
 from .helpers import EAST, NORTH_EAST, NORTH_WEST, SOUTH_EAST, SOUTH_WEST, WEST, board, steps, tips_at
@@ -52,8 +52,24 @@ def test_catalog_holds_exactly_the_eight_species():
         "calm_min",
         "calm_max",
         "turn_chance",
+        "persistence",
         "cut_response",
     ]
+
+
+def test_each_preset_has_its_persistence():
+    assert {species.id: species.persistence for species in CATALOG.values() if not species.settings} == {
+        "straight-vine": 0,
+        "zigzag": 30,
+        "spiral": 30,
+        "fern": 0,
+        "wanderer": 60,
+        "hydra": 80,
+        "burst": 30,
+    }
+    world = World(seed=1)
+    world.plant_seed((0, 0), "hydra", "1", "p1")
+    assert CATALOG["hydra"].persistence_of(world.plants[1]) == 80
 
 
 def test_settings_descriptions_name_kind_range_and_default():
@@ -63,6 +79,14 @@ def test_settings_descriptions_name_kind_range_and_default():
         "label": "Branch chance %",
         "kind": "percent",
         "default": 10,
+        "min": 0,
+        "max": 100,
+    }
+    assert descriptions["persistence"] == {
+        "id": "persistence",
+        "label": "Persistence %",
+        "kind": "percent",
+        "default": 50,
         "min": 0,
         "max": 100,
     }
@@ -210,9 +234,18 @@ def test_fern_cut_is_final_but_side_branches_finish():
 # -- wanderer ----------------------------------------------------------------
 
 
-def wander(seed: int, wanted: int = 500) -> list:
-    """The headings of a wanderer's first ``wanted`` steps, or fewer if it trapped itself."""
-    world = World(seed=seed)
+class SettledWanderer(Wanderer):
+    """A wanderer that never takes another path, so every step it takes is one it chose."""
+
+    persistence = 0
+
+
+def wander(seed: int, wanted: int = 500, settled: bool = False) -> list:
+    """The headings of a wanderer's first ``wanted`` steps, or fewer if it stopped.
+
+    A settled wanderer never detours, which isolates the wanderer's own turning rule.
+    """
+    world = World(seed=seed, catalog={"wanderer": SettledWanderer()} if settled else None)
     world.plant_seed((0, 0), "wanderer", "1", "p1", direction=EAST)
     for _ in range(wanted):
         world.step()
@@ -224,7 +257,7 @@ def wander(seed: int, wanted: int = 500) -> list:
 def test_wanderer_makes_only_gentle_turns_about_a_fifth_of_the_time():
     changes = []
     for seed in range(60):
-        taken = wander(seed, 300)
+        taken = wander(seed, 300, settled=True)
         changes += [(b - a) % 6 for a, b in zip(taken, taken[1:])]
 
     assert len(changes) > 3000
@@ -235,6 +268,18 @@ def test_wanderer_makes_only_gentle_turns_about_a_fifth_of_the_time():
     assert 0.4 <= rights / turns <= 0.6
 
 
+def test_wanderer_detours_add_at_most_one_more_turn():
+    changes = []
+    for seed in range(60):
+        taken = wander(seed, 300)
+        changes += [(b - a) % 6 for a, b in zip(taken, taken[1:])]
+
+    # A detour turns 60 degrees from where the wanderer meant to go, which may
+    # itself be a turn; it never doubles back.
+    assert 3 not in changes
+    assert {2, 4} & set(changes)
+
+
 def test_wanderer_waits_when_it_runs_into_itself():
     world = World(seed=0)
     world.plant_seed((0, 0), "wanderer", "1", "p1", direction=EAST)
@@ -243,7 +288,7 @@ def test_wanderer_waits_when_it_runs_into_itself():
         if any(tip.blocked for tip in world.tips.values()):
             break
     (tip,) = world.tips.values()
-    assert tip.blocked
+    assert tip.blocked  # it lost its roll, or had no free side to turn to
     assert world.cells[neighbor(tip.cell, tip.heading)].plant_id == 1
 
     size = len(world.cells)
@@ -349,3 +394,66 @@ def test_every_direction_table_entry_is_used():
     # A guard for the helpers above: walking all six directions returns to the start.
     assert walk((0, 0), [(d, 1) for d in range(6)])[-1] == (0, 0)
     assert len(DIRECTIONS) == 6
+
+
+# -- after taking another path -----------------------------------------------
+
+
+def always_detouring(species_class, seed: int = 1) -> World:
+    """A world where the given preset always takes another path when it can."""
+    species = type(f"Persistent{species_class.__name__}", (species_class,), {"persistence": 100})()
+    return World(seed=seed, catalog={species.id: species, "straight-vine": CATALOG["straight-vine"]})
+
+
+def obstacle(world: World, hex) -> None:
+    world.plant_seed(hex, "straight-vine", "1/1000", "p2", direction=EAST)
+
+
+def test_zigzag_sidesteps_and_keeps_its_line():
+    world = always_detouring(Zigzag)
+    world.plant_seed((0, 0), "zigzag", "1", "p1", direction=EAST)
+    obstacle(world, (2, 1))  # in the way of the third step, east from (1, 1)
+    obstacle(world, (2, 0))  # leaves only south-east
+    steps(world, 9)
+
+    taken = headings(path_from_root(world))
+    assert taken[:3] == [EAST, SOUTH_EAST, SOUTH_EAST]  # the third step is the detour
+    assert taken[3:] == [SOUTH_EAST, EAST, SOUTH_EAST, EAST, SOUTH_EAST, EAST]
+
+
+def test_burst_arm_turns_and_still_fans_after_four_cells():
+    world = always_detouring(Burst)
+    world.plant_seed((0, 0), "burst", "1", "p1", direction=EAST)
+    obstacle(world, (3, 0))
+    obstacle(world, (3, -1))  # leaves only south-east from (2, 0)
+    steps(world, 6)
+
+    # (1, 0), (2, 0), then south-east (2, 1), (2, 2): the fourth cell fans.
+    assert {(2, 1), (2, 2), (2, 3), (2, 4)} <= set(world.cells)
+    assert tips_at(world, (2, 4)) == [SOUTH_EAST]
+    assert world.cells[(3, 2)].parent == (2, 2)  # forward-left of south-east is east
+    assert world.cells[(1, 3)].parent == (2, 2)  # forward-right is south-west
+
+
+def test_hydra_keeps_its_new_direction():
+    world = always_detouring(Hydra)
+    world.plant_seed((0, 0), "hydra", "1", "p1", direction=EAST)
+    obstacle(world, (2, 0))
+    obstacle(world, (2, -1))
+    steps(world, 6)
+
+    assert headings(path_from_root(world)) == [EAST] + [SOUTH_EAST] * 5
+
+
+def test_straight_vine_and_fern_never_take_another_path():
+    for species in ("straight-vine", "fern"):
+        world = World(seed=1)
+        world.plant_seed((0, 0), species, "1", "p1", direction=EAST)
+        obstacle(world, (2, 0))
+        steps(world, 2)
+        rng_state = world.rng.getstate()
+        steps(world, 20)
+
+        stem = next(tip for tip in world.tips.values() if tip.plant_id == 1 and tip.cell == (1, 0))
+        assert stem.blocked and stem.heading == EAST
+        assert world.rng.getstate() == rng_state

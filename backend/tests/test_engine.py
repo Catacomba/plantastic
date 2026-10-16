@@ -159,3 +159,86 @@ def test_tip_stopped_by_a_full_board_decides_once():
     world.step()
     assert (1, 0) in world.cells  # the first tip advanced the way it decided before the wait
     assert gambler.calls == 6
+
+
+# -- persistence ----------------------------------------------------------------
+
+
+def stubborn_world(persistence: int, seed: int = 1, script=()):
+    """A scripted plant heading east from (0, 0), with (2, 0) already taken."""
+    from plantastic.sim.species import CATALOG
+
+    species = Scripted(script)
+    species.persistence = persistence
+    world = World(seed=seed, catalog={species.id: species, VINE: CATALOG[VINE]})
+    world.plant_seed((0, 0), species.id, "1", "p1", direction=EAST)
+    world.plant_seed((2, 0), VINE, "1/1000", "p2", direction=EAST)
+    return world, species
+
+
+def own(world):
+    return next(tip for tip in world.tips.values() if tip.plant_id == 1)
+
+
+def test_tip_that_gives_up_waits_without_rolling_again():
+    world, _ = stubborn_world(1)  # the roll fails for this seed
+    world.step()
+    before = world.rng.getstate()
+    world.step()
+    assert world.rng.getstate() != before  # one roll for this hex
+    tip = own(world)
+    assert tip.blocked and tip.cell == (1, 0) and tip.heading == EAST
+    rng_state = world.rng.getstate()
+
+    steps(world, 20)
+    assert tip.blocked and tip.cell == (1, 0) and tip.heading == EAST
+    assert world.rng.getstate() == rng_state
+
+
+def test_tip_that_gave_up_resumes_its_way_and_rolls_again_at_the_next_obstacle():
+    world, _ = stubborn_world(1)
+    world.plant_seed((4, 0), VINE, "1/1000", "p2", direction=EAST)
+    steps(world, 5)
+    world.cut((2, 0))  # a root, so the whole obstacle goes
+
+    world.step()
+    tip = own(world)
+    assert tip.cell == (2, 0) and tip.heading == EAST
+    world.step()
+    assert tip.cell == (3, 0)
+    rng_state = world.rng.getstate()
+    world.step()  # (4, 0) is taken: a fresh roll
+    assert world.rng.getstate() != rng_state
+
+
+def test_detoured_tip_rolls_again_at_its_next_obstacle():
+    world, _ = stubborn_world(100)
+    world.plant_seed((2, -1), VINE, "1/1000", "p2", direction=EAST)  # leaves only south-east
+    world.plant_seed((1, 3), VINE, "1/1000", "p2", direction=EAST)  # in the way after the detour
+    steps(world, 3)
+    tip = own(world)
+    assert tip.cell == (1, 2) and tip.heading == SOUTH_EAST
+
+    world.step()
+    assert not tip.blocked
+    assert tip.cell in {(2, 2), (0, 3)}
+
+
+def test_persistence_is_honoured_roughly():
+    taken = 0
+    for seed in range(400):
+        world, _ = stubborn_world(30, seed=seed)
+        steps(world, 2)
+        taken += not own(world).blocked
+    assert 0.2 <= taken / 400 <= 0.4
+
+
+def test_last_hex_is_entered_by_another_path_and_then_the_tip_ends():
+    world, species = stubborn_world(100, script=[lambda tip: [Shoot(EAST)], lambda tip: [Shoot(EAST, last=True)]])
+    world.plant_seed((2, -1), VINE, "1/1000", "p2", direction=EAST)
+    steps(world, 2)
+
+    assert world.cells[(1, 1)].plant_id == 1
+    assert all(tip.plant_id != 1 for tip in world.tips.values())
+    steps(world, 3)
+    assert species.calls == 2

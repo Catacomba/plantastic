@@ -55,7 +55,8 @@ export function createMetrics() {
         handleHistory.shift();
         tipHistory.shift();
       }
-      if (available) tickMs = available;
+      // null at max speed, where no time is set aside per iteration.
+      if (available !== undefined) tickMs = available;
       if (!stats || !stats.iterations) return;
       const eachMs = stats.step_ms / stats.iterations;
       iteration = { ms: eachMs, visits: Math.round(stats.visits / stats.iterations) };

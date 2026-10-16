@@ -39,7 +39,8 @@ const metrics = createMetrics();
 // `meta` is how the update arrived, present only while the metrics are on.
 function redraw(state, meta) {
   board.setCells(state.cells);
-  board.setTips(state.tips);
+  // Stuck tips are drawn too; the server just stops resending them.
+  board.setTips(state.sleeping.size ? [...state.tips, ...state.sleeping.values()] : state.tips);
   ui.sync();
   showHover(); // what is under a resting cursor may have changed
   reportScatter(state.scattered);
@@ -48,7 +49,7 @@ function redraw(state, meta) {
       bytes: meta.bytes,
       handleMs: performance.now() - meta.arrived,
       stats: state.stats,
-      tips: state.tips.length,
+      tips: state.tips.length + state.sleeping.size,
       tickMs: state.tickMs,
     });
   }
@@ -84,15 +85,24 @@ function visibleRegion() {
 
 // What the metrics panel counts on the board. Only asked for while it is shown.
 function boardCounts() {
-  const { tips, cells, plants } = net.state;
-  let waiting = 0;
+  const { tips, sleeping, cells, plants } = net.state;
+  // Every sleeping tip is waiting; awake ones may be too.
+  let waiting = sleeping.size;
   for (const tip of tips) if (tip.blocked) waiting += 1;
-  return { tips: tips.length, waiting, cells: cells.size, plants: plants.size };
+  return {
+    tips: tips.length + sleeping.size,
+    waiting,
+    asleep: sleeping.size,
+    cells: cells.size,
+    plants: plants.size,
+  };
 }
 
 const net = connect({
   onWelcome(state) {
     ui.welcome();
+    // A new room starts skipping stuck tips; ask for what this browser chose.
+    if (ui.skipStuck !== state.skipStuck) net.skipStuck(ui.skipStuck);
     redraw(state);
   },
   onUpdate: redraw,
@@ -118,7 +128,10 @@ const ui = setupUi({
   metrics,
   boardCounts,
   onHexSize: (size) => setHexSize(size),
-  onScatter: (count) => net.scatter(count, visibleRegion()),
+  onScatter(count) {
+    const persistence = ui.persistence;
+    if (persistence !== null) net.scatter(count, visibleRegion(), persistence);
+  },
   onMetrics(on) {
     metrics.enabled = on;
     net.measuring = on;
@@ -161,8 +174,12 @@ function beginTool() {
   if (!net.state.connected) return;
   const start = board.hexAt(pointer.x, pointer.y);
   if (ui.tool === "seed") {
-    if (ui.speed === "") ui.toast("Enter a speed for the seed.");
-    else net.plant(start[0], start[1], ui.species, ui.speed, ui.settings);
+    if (ui.speed === "") {
+      ui.toast("Enter a speed for the seed.");
+      return;
+    }
+    const persistence = ui.persistence;
+    if (persistence !== null) net.plant(start[0], start[1], ui.species, ui.speed, ui.settings, persistence);
     return;
   }
   stroke = {

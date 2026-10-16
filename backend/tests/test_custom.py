@@ -14,6 +14,7 @@ DEFAULTS = {
     "calm_min": 0,
     "calm_max": None,
     "turn_chance": 0,
+    "persistence": 0,
     "cut_response": "fork",
 }
 

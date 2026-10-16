@@ -60,14 +60,14 @@ Each plant SHALL have a speed, a positive number of hexagons per iteration that 
 - **THEN** the planting is rejected and the board is unchanged
 
 ### Requirement: Blocked tips wait
-A tip whose next hex is occupied SHALL NOT advance and SHALL NOT turn. It SHALL remain a tip, and SHALL advance on a later iteration once that hex is empty. While blocked, a tip SHALL NOT bank more than one hex of progress.
+A tip whose next hex is occupied, and that does not take another path around it, SHALL NOT advance and SHALL NOT turn. It SHALL remain a tip, and SHALL advance on a later iteration once that hex is empty. While blocked, a tip SHALL NOT bank more than one hex of progress.
 
 #### Scenario: Tip runs into another plant
-- **WHEN** a tip's next hex is occupied by any cell
+- **WHEN** a tip of a plant with persistence 0 finds its next hex occupied by any cell
 - **THEN** the tip stays where it is for as long as that hex is occupied
 
 #### Scenario: Obstacle is removed
-- **WHEN** the cell blocking a tip is removed by a cut
+- **WHEN** the cell blocking a waiting tip is removed by a cut
 - **THEN** the tip advances into the freed hex on the next iteration and continues at its normal speed, without a burst of catch-up growth
 
 ### Requirement: Tips turn, branch, and end
@@ -90,10 +90,10 @@ On each step a tip's species SHALL decide whether the tip continues in a new or 
 - **THEN** the tip no longer exists, its cells remain on the board, and the plant's other tips keep growing
 
 ### Requirement: One growth decision per hex
-A tip SHALL make its growth decision once for each hex it enters. A tip that cannot advance, because its next hex is occupied or because the board is full, SHALL keep the decision it made and SHALL NOT decide again, draw further random numbers, or sprout further tips until it has advanced.
+A tip SHALL make its growth decision once for each hex it enters. A tip that cannot advance, because its next hex is occupied or because the board is full, SHALL keep the decision it made and SHALL NOT decide again or sprout further tips until it has advanced. Apart from its single persistence roll for that hex, it SHALL NOT draw further random numbers while it waits.
 
 #### Scenario: Blocked after deciding to turn
-- **WHEN** a tip decides to turn and finds the hex in its new direction occupied
+- **WHEN** a tip of a plant with persistence 0 decides to turn and finds the hex in its new direction occupied
 - **THEN** it waits heading in that direction, and advances that way once the hex is empty
 
 #### Scenario: Board full
@@ -101,15 +101,19 @@ A tip SHALL make its growth decision once for each hex it enters. A tip that can
 - **THEN** it has sprouted nothing and changed nothing during those iterations, and when room is made it advances as it had decided before the wait
 
 #### Scenario: Waiting does not disturb replay
-- **WHEN** two boards with the same random seed receive the same actions, including a period in which tips are blocked
+- **WHEN** two boards with the same random seed receive the same actions, including a period in which tips are blocked and some take another path
 - **THEN** the boards are identical after every iteration
 
 ### Requirement: Deterministic collisions
-When more than one tip is due to enter the same empty hex in the same iteration, exactly one SHALL enter it and the others SHALL be blocked. The tip of the plant planted earliest SHALL win; between tips of the same plant, the tip created earliest SHALL win.
+When more than one tip is due to enter the same empty hex in the same iteration, exactly one SHALL enter it and the others SHALL be blocked. The tip of the plant planted earliest SHALL win; between tips of the same plant, the tip created earliest SHALL win. A tip that loses SHALL then be treated like any other blocked tip, including its persistence roll.
 
 #### Scenario: Two plants reach the same hex
 - **WHEN** tips of two different plants are both due to enter the same empty hex in one iteration
 - **THEN** the tip of the plant that was planted first occupies the hex and the other tip is blocked
+
+#### Scenario: The loser takes another path
+- **WHEN** the losing tip of a contested hex belongs to a plant with persistence 100 and one of its side hexes is empty
+- **THEN** it enters that side hex in the same iteration
 
 ### Requirement: Cutting a plant
 Cutting a hex that holds a living, non-root plant cell SHALL turn that cell into a stump and SHALL immediately remove every cell and tip of that plant that was connected to the root only through the cut cell. A stump SHALL keep occupying its hex and SHALL never grow. The plant SHALL then respond to the cut as its species defines.
@@ -287,3 +291,76 @@ Each iteration SHALL report the number of tip visits it made, where a tip visit 
 #### Scenario: Several iterations together
 - **WHEN** several iterations are advanced as one batch
 - **THEN** the reported tip visits are the sum of the visits of each iteration
+
+### Requirement: Blocked tips may take another path
+Each plant SHALL have a persistence, a whole percentage from 0 to 100, fixed when it is planted. When a tip's next hex is occupied by any cell, including one of its own plant, and the board is not full, the tip SHALL roll its persistence once, provided a hex 60 or 120 degrees to either side of its heading is empty. If the roll succeeds, the tip SHALL turn into the gentlest such hex and advance into it at once: a 60-degree turn when one is empty, otherwise a 120-degree turn, choosing at random between two equally sharp empty turns. It SHALL never turn straight back.
+
+#### Scenario: Persistence of zero
+- **WHEN** a tip of a plant with persistence 0 finds its next hex occupied
+- **THEN** it waits without turning, exactly as a blocked tip did before persistence existed
+
+#### Scenario: Persistence of one hundred
+- **WHEN** a tip of a plant with persistence 100 heading east finds its next hex occupied, with the north-east hex occupied and the south-east hex empty
+- **THEN** the tip turns south-east and enters that hex in the same iteration
+
+#### Scenario: Both sides empty
+- **WHEN** tips of plants with persistence 100 are blocked many times with both side hexes empty
+- **THEN** each detour goes 60 degrees left or right, and both sides occur
+
+#### Scenario: Only a sharp turn is free
+- **WHEN** a tip of a plant with persistence 100 heading east finds its next hex, the north-east hex, and the south-east hex occupied, with the north-west hex empty and the south-west hex occupied
+- **THEN** the tip turns north-west and enters that hex in the same iteration
+
+#### Scenario: Both sharp turns free
+- **WHEN** tips of plants with persistence 100 are blocked many times with both 60-degree turns occupied and both 120-degree turns empty
+- **THEN** each detour goes 120 degrees left or right, and both sides occur
+
+#### Scenario: Gentle turns come first
+- **WHEN** a blocked tip of a plant with persistence 100 has one 60-degree turn and both 120-degree turns empty
+- **THEN** it always takes the 60-degree turn
+
+#### Scenario: Blocked by its own plant
+- **WHEN** a tip of a plant with persistence 100 runs into one of its own plant's cells and a side hex is empty
+- **THEN** it takes another path just as it would around another plant
+
+#### Scenario: No empty side
+- **WHEN** a blocked tip's hexes 60 and 120 degrees to both sides are all occupied
+- **THEN** it waits, and no random number is drawn for it
+
+#### Scenario: Board full
+- **WHEN** a tip's next hex is occupied while the board is full
+- **THEN** it waits, and no random number is drawn for it
+
+#### Scenario: Rough rate
+- **WHEN** many tips of plants with persistence 30 each meet one obstacle with both sides empty
+- **THEN** between 20 and 40 percent of them take another path and the rest wait
+
+### Requirement: One persistence roll per obstacle
+A tip SHALL roll its persistence at most once for each hex it is due to enter. A tip whose roll fails SHALL give up on that hex: it SHALL wait without turning and without drawing further random numbers. Once that hex is empty it SHALL advance into it as decided before the wait. The next obstacle the tip meets after advancing SHALL get a new roll.
+
+#### Scenario: Gives up and waits
+- **WHEN** a tip's persistence roll fails and its next hex stays occupied for 20 iterations, while a side hex is empty
+- **THEN** the tip stays where it is, heading the same way, and the board's random generator is not advanced on its behalf during those iterations
+
+#### Scenario: Resumes after giving up
+- **WHEN** the cell blocking a tip that gave up is cut away
+- **THEN** the tip advances into the freed hex in its original direction on the next iteration
+
+#### Scenario: Obstacle appears while waiting on a full board
+- **WHEN** a tip waits because the board is full, and room is later made while its next hex is occupied
+- **THEN** it rolls its persistence once at that point
+
+#### Scenario: A fresh roll for each obstacle
+- **WHEN** a tip that took another path around one obstacle later meets a second obstacle
+- **THEN** it rolls its persistence again for the second obstacle
+
+### Requirement: Growth continues after taking another path
+Taking another path SHALL change only the direction of the hex the tip enters. It SHALL NOT be a growth decision of its own. The decision the tip made for that step, including any tips it sprouted and whether the tip ends after the hex, SHALL stand. From the new hex the tip's species SHALL decide its next step as usual, starting from the tip's new heading.
+
+#### Scenario: Straight grower keeps its new direction
+- **WHEN** a straight-growing tip with persistence 100 heading east takes another path to the south-east around an obstacle
+- **THEN** it keeps growing south-east afterwards
+
+#### Scenario: Last hex of a tip
+- **WHEN** a tip that decided its next hex is its last takes another path
+- **THEN** it enters the side hex and then ends, as it would have in its original direction

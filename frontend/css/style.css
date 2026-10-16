@@ -250,6 +250,16 @@ input[type="range"] {
   width: 64px;
 }
 
+.override {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#persistence {
+  width: 64px;
+}
+
 .settings .never {
   display: flex;
   align-items: center;

@@ -2,8 +2,10 @@
 
 from collections import Counter
 
+import pytest
+
 from plantastic.sim.species import CATALOG
-from plantastic.sim.world import Changes, World
+from plantastic.sim.world import Changes, SimError, World
 
 from .helpers import EAST, VINE, board, steps
 
@@ -230,3 +232,27 @@ def scattered(seed: int) -> list:
 def test_same_seed_scatters_identically_and_different_seeds_differ():
     assert scattered(8) == scattered(8)
     assert scattered(8) != scattered(9)
+
+
+def test_scatter_with_a_persistence_gives_it_to_every_plant():
+    world = World(seed=1)
+    world.scatter(20, (0, 0), 10, 10, "p1", persistence=70)
+    assert len(world.plants) == 20
+    assert {plant.persistence for plant in world.plants.values()} == {70}
+
+
+def test_scatter_without_a_persistence_uses_each_species_default():
+    world = World(seed=1)
+    world.scatter(60, (0, 0), 20, 20, "p1")
+    assert all(plant.persistence == CATALOG[plant.species_id].persistence for plant in world.plants.values())
+    assert len({plant.persistence for plant in world.plants.values()}) > 1
+
+
+def test_scatter_with_a_bad_persistence_plants_nothing_and_draws_nothing():
+    world = World(seed=1)
+    rng_state = world.rng.getstate()
+    with pytest.raises(SimError) as error:
+        world.scatter(10, (0, 0), 5, 5, "p1", persistence=150)
+    assert error.value.code == "bad_persistence"
+    assert not world.plants and not world.cells
+    assert world.rng.getstate() == rng_state
